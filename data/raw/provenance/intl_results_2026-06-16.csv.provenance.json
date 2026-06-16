@@ -1,0 +1,10 @@
+{
+  "dest_name": "intl_results_2026-06-16.csv",
+  "fetch_timestamp_utc": "2026-06-16T19:03:48.683196+00:00",
+  "n_bytes_raw": 3724367,
+  "note": null,
+  "sha256_lf": "94bf380656ab84dfa1a8ff8357478c45ef60cc9aaf73693a18ec7f773bd37bef",
+  "snapshot_date": "2026-06-16",
+  "source_label": "martj42/international_results results.csv (independent settlement cross-check)",
+  "source_url": "https://raw.githubusercontent.com/martj42/international_results/master/results.csv"
+}

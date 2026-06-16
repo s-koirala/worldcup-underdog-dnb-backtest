@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.uv/
+*.egg-info/
+.ipynb_checkpoints/
+
+# Data (raw/processed are large and/or license-restricted; track checksums, not bytes)
+data/raw/*
+data/processed/*
+data/external/*
+!data/**/.gitkeep
+!data/**/*.sha256
+# Provenance audit trail (small; source-of-record for data acquisition) — tracked
+!data/raw/provenance/
+!data/raw/provenance/**
+# Hand-curated reference tables — tracked
+!data/external/team_aliases.csv
+
+# Artifacts (rendered outputs; regenerable from code + data + seed)
+artifacts/figures/*
+artifacts/tables/*
+artifacts/reports/*
+!artifacts/**/.gitkeep
+
+# Repro logs are per-run and regenerable; track only the dir
+# (sibling convention: ReproLogs tracked manually only when a commit references one)
+logs/*
+!logs/.gitkeep
+
+# Agent scratch / probe dirs — never committed
+.tmp_probe/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

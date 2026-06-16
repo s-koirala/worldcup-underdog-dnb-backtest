@@ -1,0 +1,2 @@
+# Keeps logs/ in the tree. Per-run ReproLog / data-quality / pip-freeze records are
+# written here and are git-ignored (regenerable; the emitting code is the source of truth).

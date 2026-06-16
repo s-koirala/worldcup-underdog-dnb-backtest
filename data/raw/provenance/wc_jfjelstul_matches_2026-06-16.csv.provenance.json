@@ -1,0 +1,10 @@
+{
+  "dest_name": "wc_jfjelstul_matches_2026-06-16.csv",
+  "fetch_timestamp_utc": "2026-06-16T19:03:47.937106+00:00",
+  "n_bytes_raw": 298930,
+  "note": null,
+  "sha256_lf": "037f718764758e7dda3a2918276f85fa8389af1d50999d2a480c8a6a49408875",
+  "snapshot_date": "2026-06-16",
+  "source_label": "jfjelstul/worldcup matches.csv (academic FIFA World Cup DB, GitHub master)",
+  "source_url": "https://raw.githubusercontent.com/jfjelstul/worldcup/master/data-csv/matches.csv"
+}

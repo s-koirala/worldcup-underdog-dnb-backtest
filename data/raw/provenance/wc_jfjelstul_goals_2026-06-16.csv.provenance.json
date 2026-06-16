@@ -1,0 +1,10 @@
+{
+  "dest_name": "wc_jfjelstul_goals_2026-06-16.csv",
+  "fetch_timestamp_utc": "2026-06-16T19:03:48.169345+00:00",
+  "n_bytes_raw": 734494,
+  "note": null,
+  "sha256_lf": "4fbe990b7f42bb8af00d1587af09359ecfdb4ee4101bb44fda0eb336fc1e5be3",
+  "snapshot_date": "2026-06-16",
+  "source_label": "jfjelstul/worldcup goals.csv (per-goal minute + match_period; 90-min reconstruction)",
+  "source_url": "https://raw.githubusercontent.com/jfjelstul/worldcup/master/data-csv/goals.csv"
+}

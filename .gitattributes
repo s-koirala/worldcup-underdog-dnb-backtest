@@ -1,0 +1,18 @@
+# Cross-platform reproducibility (plan task 10b; §D.7).
+# The project is authored on Windows but the path scheme, league codes, and
+# football-data DD/MM/YY CSV handling are Unix-conventional, so CRLF/LF drift
+# would break the byte-identical / checksum-equality acceptance criteria.
+#
+# Dataset checksums (ReproLog dataset_checksums, ARCH §3.2) are computed on
+# NORMALIZED (LF) bytes; pinning these files to LF on checkout keeps the
+# checksum sidecars and golden fixtures byte-stable across platforms.
+
+# Default: let Git normalize line endings on commit, auto-detect text vs binary.
+* text=auto
+
+# CSV data + golden fixtures (e.g. tests/fixtures/mini_league.csv): force LF so
+# checksums match the LF-normalized ReproLog hashes on every platform.
+*.csv text eol=lf
+
+# Checksum sidecars: force LF so the sidecar bytes are platform-invariant.
+*.sha256 text eol=lf

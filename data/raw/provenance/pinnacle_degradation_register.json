@@ -1,0 +1,31 @@
+{
+  "gate_passed": true,
+  "notice": {
+    "date_present": true,
+    "date_token": "23/07/2025",
+    "expected_text": "Since 23/07/2025 Pinnacle's public API for odds delivery has become unreliable meaning their odds are systematically out of date relative to odds for other bookmakers, including both the pre-closing and closing odds. Consequently they should be used with caution when undertaking any betting analyses, and are no longer being included for the calculation of market average and maximum odds.",
+    "extracted_text": "Since 23/07/2025 Pinnacle's public API for odds delivery has become unreliable meaning their odds are systematically out of date relative to odds for other bookmakers, including both the pre-closing and closing odds. Consequently they should be used with caution when undertaking any betting analyses, and are no longer being included for the calculation of market average and maximum odds.",
+    "matches_expected": true
+  },
+  "plan_task": "3.1",
+  "psc_staleness_confirmation": {
+    "avgc_coverage": 1.0,
+    "n_rows": 380,
+    "probe_file": "2526_E0.csv",
+    "psc_below_avgc": true,
+    "psc_coverage": 0.5526
+  },
+  "register_type": "pinnacle_degradation_notice",
+  "sources": {
+    "data_php.html": {
+      "bytes": 52602,
+      "sha256": "8cce00d58aa78832cd5a66d1713ad59d36fa25f71740034b76b3d8b4c4612c7e",
+      "url": "https://www.football-data.co.uk/data.php"
+    },
+    "notes.txt": {
+      "bytes": 7316,
+      "sha256": "f18ea847dbc1a4572dcfbd7dac87b7e5b56a55cb3926acfa4aefd57d67723766",
+      "url": "https://www.football-data.co.uk/notes.txt"
+    }
+  }
+}

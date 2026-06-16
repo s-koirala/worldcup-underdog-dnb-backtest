@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://worldcup-underdog-dnb-backtest/config/reprolog_schema.json",
+  "title": "ReproLog",
+  "description": "Reproducibility envelope emitted before any artifact write. Exactly 13 named atomic keys (plan Phase 0 Methods 'Reproducibility envelope', keys 1-13; ARCH §3.2). The five CLAUDE.md-mandated keys are present by name: git_head (1), pip_freeze_sha256 (3), dataset_checksums (5), rng_seed (8), model_hash (10). The 'schema_version' field is metadata, not one of the 13 record keys.",
+  "type": "object",
+  "schema_version": "1.0.0",
+  "additionalProperties": false,
+  "required": [
+    "git_head",
+    "git_dirty",
+    "pip_freeze_sha256",
+    "pip_freeze_path",
+    "dataset_checksums",
+    "data_vendor",
+    "snapshot_date",
+    "rng_seed",
+    "config_resolved_sha256",
+    "model_hash",
+    "run_id",
+    "timestamp",
+    "runtime"
+  ],
+  "properties": {
+    "git_head": {
+      "description": "Key 1 (CLAUDE.md-mandated: git HEAD). Commit SHA of HEAD, or null/\"UNCOMMITTED\" in the pre-first-commit zero-commit state.",
+      "type": ["string", "null"]
+    },
+    "git_dirty": {
+      "description": "Key 2. Working-tree-dirty flag (git status --porcelain non-empty). True in the zero-commit state.",
+      "type": "boolean"
+    },
+    "pip_freeze_sha256": {
+      "description": "Key 3 (CLAUDE.md-mandated: project-venv pip freeze). SHA-256 hex of the `uv pip freeze` output. 64 lowercase hex chars.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "pip_freeze_path": {
+      "description": "Key 4. Repo-relative POSIX path to the captured freeze text.",
+      "type": "string"
+    },
+    "dataset_checksums": {
+      "description": "Key 5 (CLAUDE.md-mandated: dataset checksum). Map dataset-id -> SHA-256 hex on normalized (LF) bytes / canonicalized parquet. Empty {} when no data is consumed (e.g. --dry-run).",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      }
+    },
+    "data_vendor": {
+      "description": "Key 6. Vendor string, or null before any ingest.",
+      "type": ["string", "null"]
+    },
+    "snapshot_date": {
+      "description": "Key 7. Vendor snapshot date (ISO-8601 date), or null before any ingest.",
+      "type": ["string", "null"]
+    },
+    "rng_seed": {
+      "description": "Key 8 (CLAUDE.md-mandated: RNG seed). The arbitrary-but-fixed root seed (the single no-magic-number exemption, plan task 9.1).",
+      "type": "integer",
+      "minimum": 0
+    },
+    "config_resolved_sha256": {
+      "description": "Key 9. SHA-256 hex of the fully resolved config (or design.md SHA at pre-registration). Null only when no config is resolved.",
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "model_hash": {
+      "description": "Key 10 (CLAUDE.md-mandated: model commit hash). Hash of the fitted model / estimator state, or null before any fit.",
+      "type": ["string", "null"]
+    },
+    "run_id": {
+      "description": "Key 11. Unique run identifier (used in the logs/reprolog_<run_id>.json filename).",
+      "type": "string",
+      "minLength": 1
+    },
+    "timestamp": {
+      "description": "Key 12. ISO-8601 emission time (UTC).",
+      "type": "string"
+    },
+    "runtime": {
+      "description": "Key 13. Composite interpreter+OS/arch fingerprint, kept as one key so the total is exactly 13.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["python_version", "platform"],
+      "properties": {
+        "python_version": { "type": "string" },
+        "platform": { "type": "string" }
+      }
+    }
+  }
+}

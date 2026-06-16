@@ -1,0 +1,41 @@
+# Pre-commit configuration (Phase 0 task 2, task 2.1).
+# Install once with:  uv run pre-commit install
+# Hooks are fail-closed; CI fails on lint/test failure (ARCH §3.4).
+default_install_hook_types: [pre-commit]
+fail_fast: false
+
+repos:
+  # ruff: lint + format (ARCH §3.4; pinned to the manifest dev version).
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.12.4
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  # nbstripout: strip notebook outputs + author metadata (publishing identity hygiene).
+  - repo: https://github.com/kynan/nbstripout
+    rev: 0.8.1
+    hooks:
+      - id: nbstripout
+
+  # nbqa ruff on notebooks (ARCH §3.4).
+  - repo: https://github.com/nbQA-dev/nbQA
+    rev: 1.9.1
+    hooks:
+      - id: nbqa-ruff
+        args: [--fix]
+
+  # Local fail-closed gates.
+  - repo: local
+    hooks:
+      # Identity-hygiene gate (task 2.1): blocks the commit unless the SKIE
+      # pseudonym identity is set, useConfigOnly=true, and no real-identity
+      # token (skoir / skoirala2625@gmail.com) is in author or staged content.
+      - id: skie-identity-hygiene
+        name: SKIE identity-hygiene gate (fail-closed)
+        entry: python -m src.identity_gate
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]

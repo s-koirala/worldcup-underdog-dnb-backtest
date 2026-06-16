@@ -1,0 +1,273 @@
+# config/multipletest_family.yaml -- the frozen multiple-testing register.
+#
+# Phase 0 task 6 (+6.1, +6.2); plan §C, §D.2; methodology.md §3; STAT §7-§8;
+# STAKE §7.2. Maintained by the `multipletest-gate` skill.
+#
+# FROZEN BEFORE ANY WORLD-CUP NUMBER IS COMPUTED. This file fixes:
+#   (a) the headline family menu and its count K (drives White RC / Hansen SPA
+#       and the Deflated-Sharpe N / N_eff);
+#   (b) the World-Cup hold-out stratification count K_WC (the BH-FDR-controlled
+#       exploratory layer that CANNOT upgrade the headline verdict);
+#   (c) the cross-pillar WC-test inventory checklist (task 6.1) -- one row per
+#       WC-touching test, each mapped to a K_WC cell or declared non-inferential;
+#   (d) the pinned Deflated-Sharpe N_eff rule (task 6.2): conservative raw-N.
+#
+# No-magic-number discipline (CLAUDE.md; plan §D.3): every threshold grid below
+# is `null` (to be filled by walk-forward CV / empirical quantile, never
+# hand-set). Counts that depend on a `null` grid are expressed as a product with
+# the grid cardinality named, so K is recomputable once the grid resolves; the
+# register is re-frozen (and K re-counted) at that point, before fitting.
+
+register_version: "1.0.0"
+frozen_before_wc: true # invariant the multipletest-gate asserts before any WC score
+date: 2026-06-16
+
+# ===========================================================================
+# A. HEADLINE FAMILY MENU (drives K; White RC / Hansen SPA + HAC-inflated DSR)
+# ===========================================================================
+# The headline verdict rests on ONE league-selected cell scored once on the full
+# WC block. K is the count of candidate cells the selection searched over (incl.
+# abandoned cells -- plan Risk "enumerate abandoned candidate cells too", STAT
+# Open Question 8), so the correction denominator and the DSR E[max SR] are
+# honest.
+headline_family:
+  dimensions:
+    # 1. Side definition. The strategy backs the price-underdog; the favourite
+    #    side is the comparator arm (Ledoit-Wolf favourite-vs-underdog, EDGE §7
+    #    item 4). Both are searched -> 2 cells.
+    side:
+      values: [underdog, favourite]
+      cardinality: 2
+
+    # 2. Staking scheme. The FIVE canonical schemes (methodology.md §1.2; STAKE
+    #    §2/§7.1). MUST match config/baseline.yaml staking.schemes BYTE-FOR-BYTE
+    #    (a four-vs-five mismatch corrupts the K denominator -- plan task 4.1).
+    #    level_to_odds is explicitly included (it was dropped in ARCH §3.3).
+    staking_scheme:
+      values: [flat, fixed_fraction, level_to_odds, kelly, fractional_kelly]
+      cardinality: 5
+
+    # 3. Underdog-threshold grid `tau` (the price-gap / implied-prob cut above
+    #    which a match is a candidate underdog bet). Selected by walk-forward CV
+    #    (CALC §2.3; STAT §9.1), NOT hand-set -> grid is null; cardinality is the
+    #    number of grid points the CV searches (`n_tau`), fixed when the grid is
+    #    resolved and the register re-frozen before fitting.
+    underdog_threshold:
+      grid: null # filled by walk-forward CV; no-magic-number (§D.3)
+      cardinality_symbol: n_tau
+
+    # 3b. Near-tie / coin-flip exclusion band `tau_tie` (min_price_gap). Per
+    #     plan task 4.2 this dimension is COUNTED IN K *iff* the swept branch is
+    #     frozen in design.md. design.md §3 ("Underdog near-tie rule") freezes the
+    #     SWEPT coin-flip exclusion band ("the strict-tie-only require_strict_underdog
+    #     branch is not taken") and design.md §5 lists tau_tie in the out-of-fold
+    #     selection set {tau, phi, c, lambda, tau_tie}. The frozen, immutable
+    #     pre-registration is authoritative, so this register encodes the swept
+    #     branch: included_in_k=true and tau_tie multiplies K. The grid itself stays
+    #     null (no-magic-number, §D.3) -- it is RESOLVED to a concrete n_tau_tie by
+    #     the §D.3 walk-forward sensitivity sweep, and the register is re-frozen with
+    #     the integer K before fitting; the DECISION to count it is what is frozen
+    #     now, not the grid points.
+    near_tie_band:
+      included_in_k: true # design.md §3/§5 freeze the swept band -> tau_tie is counted in K
+      grid: null # resolved to n_tau_tie by the §D.3 sweep before fitting; no-magic-number
+      cardinality_symbol: n_tau_tie # multiplies K (swept branch frozen in design.md §3/§5)
+
+    # 4. De-vig method. NOTE: de-vig is FROZEN A PRIORI by Phase-0
+    #    pre-registration (Shin primary; power and basic are registered
+    #    SENSITIVITY branches) -- it is NOT a per-fold-selected hyperparameter
+    #    (Phase 2 method; CALC §4.6; Phase 4 task 5). The menu enumerates the
+    #    three reported branches for transparency, but because the choice is not
+    #    searched it does NOT multiply K. (If a later revision makes de-vig a
+    #    per-fold SELECTED dimension, it must be added to K / N_eff -- the two
+    #    cannot both be true; this plan takes the a-priori-freeze branch.)
+    devig_method:
+      values: [shin, basic, power] # shin = primary; basic/power = registered sensitivities
+      primary: shin
+      selected_per_fold: false # frozen a priori -> does NOT enter K
+      cardinality_in_k: 1
+
+    # 5. Odds source for the DNB price: the quoted AH-0.0 line where present, the
+    #    synthetic W(D-1)/D fallback otherwise (CALC §3.5; DATA §1.2). Both are
+    #    reported -> 2 cells.
+    odds_source:
+      values: [quoted_ah, synthetic]
+      cardinality: 2
+
+  # K = side(2) x staking(5) x n_tau x n_tau_tie x devig_in_k(1) x odds_source(2)
+  #   = 20 * n_tau * n_tau_tie   (the SWEPT near-tie branch frozen in design.md §3/§5).
+  # The strict-tie branch (20 * n_tau, near_tie_band.included_in_k=false) is the one
+  # design.md §3 explicitly REJECTS, so it is not used. n_tau and n_tau_tie are fixed
+  # when the CV grids resolve; the register is re-frozen and K recomputed to a concrete
+  # integer BEFORE fitting.
+  K_formula: "side(2) * staking(5) * n_tau * n_tau_tie * devig_in_k(1) * odds_source(2)"
+  K_base_multiplier: 20 # = 2 * 5 * 1 * 2 (the resolved-cardinality factors; tau & tau_tie multiply this)
+  K: null # = 20 * n_tau * n_tau_tie; concrete integer pinned once both grids resolve, before fitting
+  count_abandoned_cells: true # abandoned candidate cells are counted in K (STAT OQ8)
+
+# ===========================================================================
+# B. WORLD-CUP HOLD-OUT STRATIFICATION (K_WC) -- exploratory BH-FDR layer
+# ===========================================================================
+# The Phase-4 task-8 stratified WC analyses each evaluate an additional
+# hypothesis on the SAME ~384-match held-out block, so they multiply the
+# effective WC looks. They are PRE-REGISTERED, BH-FDR-controlled EXPLORATORY
+# sub-analyses that describe WHERE a candidate edge sits; they CANNOT upgrade the
+# headline verdict (which rests on the league-selected cell scored once on the
+# full WC block, White RC / Hansen SPA + HAC-inflated DSR over K). No WC stratum
+# not enumerated here may be evaluated (STAT OQ8; methodology.md §3).
+wc_stratification:
+  decision: exploratory_bh_fdr # the pre-registered option (plan task 6 bullet 2)
+  cannot_upgrade_headline: true
+  dimensions:
+    # Stage (EDGE §4.1; the knockout-90'-refund subtlety is flagged).
+    stage:
+      values: [group, knockout]
+      cardinality: 2
+    # Host stratum (EDGE §4.3, Kalwij 2024): the host is not at a neutral venue.
+    host:
+      values: [host, neutral]
+      cardinality: 2
+    # Dead-rubber stratum (EDGE §4.4), tagged point-in-time via the Phase-1
+    #   task-7.1 `qual_state` feature. HEADLINE use confined to the 2002-2022
+    #   32-team block (qual_state computable from the group's own table); the
+    #   2026 Round-of-32 third-place-contingent stratum is DESCRIPTIVE ONLY
+    #   (plan task 7.1; Phase 4 task 8).
+    dead_rubber:
+      values: [dead_rubber, live]
+      cardinality: 2
+      headline_block: "2002-2022 (32-team)"
+      descriptive_only_block: "2026 (48-team, Round-of-32 third-place-contingent)"
+    # Odds bucket. The underdog price/implied-prob bucket. Cut by EMPIRICAL
+    #   QUANTILE per division-season x reference regime (DATA §8), NOT hand-set
+    #   -> grid null; cardinality is the resolved bucket count `n_odds_buckets`.
+    odds_bucket:
+      grid: null # empirical-quantile cut (§D.3); no-magic-number
+      cardinality_symbol: n_odds_buckets
+
+  # K_WC = stage(2) x host(2) x dead_rubber(2) x n_odds_buckets
+  #      = 8 * n_odds_buckets
+  # Restated in power_<HID>.md (Phase 0 task 8) so the exploratory-layer
+  # effective-trials denominator is auditable. Pinned to a concrete integer when
+  # n_odds_buckets resolves in Phase 1, before any WC number.
+  K_WC_formula: "stage(2) * host(2) * dead_rubber(2) * n_odds_buckets"
+  K_WC_base_multiplier: 8 # = 2 * 2 * 2
+  K_WC: null # concrete integer pinned once n_odds_buckets resolves, before fitting
+
+# ===========================================================================
+# B.1 CROSS-PILLAR WC-TEST INVENTORY CHECKLIST (task 6.1)
+# ===========================================================================
+# One row per WC-TOUCHING test across the six research pillars. Each is mapped to
+# a counted K_WC cell OR explicitly declared a non-inferential descriptor. Phase
+# 4 tasks 6/8 may evaluate ONLY tests present on this checklist; any WC-touching
+# test not listed and not in K_WC is an uncounted look that re-introduces the
+# selection bias the register exists to control on the smallest sample.
+wc_test_inventory:
+  - id: EDGE-7-1
+    name: "CLV on the underdog side"
+    pillar: EDGE
+    source: "EDGE §7 primary-diagnostic ranking item 1"
+    phase4_task: 6
+    inferential: true
+    correction_layer: bh_fdr_exploratory
+    maps_to_kwc_cell: "computed on the CLV-defined sub-sample (Phase 1 task 10); reported with CLV-defined fraction"
+    note: "necessary-condition edge diagnostic; primary ONLY on CLV-defined rows"
+  - id: EDGE-7-2
+    name: "underdog-vs-favourite DNB loss gradient"
+    pillar: EDGE
+    source: "EDGE §7 item 2; Phase 4 task 8 (loss-gradient test)"
+    phase4_task: 8
+    inferential: true
+    correction_layer: bh_fdr_exploratory
+    maps_to_kwc_cell: "side x (stage x host x dead_rubber x odds_bucket) strata"
+    note: "does the domestic reverse-FLB transfer to the WC; exploratory descriptor"
+  - id: EDGE-7-3
+    name: "stratified EV by phase / dead-rubber / host"
+    pillar: EDGE
+    source: "EDGE §7 item 3"
+    phase4_task: 8
+    inferential: true
+    correction_layer: bh_fdr_exploratory
+    maps_to_kwc_cell: "stage x host x dead_rubber x odds_bucket (the full K_WC grid)"
+    note: "where any genuine WC edge would live; exploratory"
+  - id: EDGE-7-4
+    name: "bootstrap CI on mean DNB return + Sharpe (Ledoit-Wolf fav-vs-underdog)"
+    pillar: EDGE
+    source: "EDGE §7 item 4; STAT §4 (Ledoit-Wolf 2008)"
+    phase4_task: [4, 8]
+    inferential: true
+    correction_layer: bh_fdr_exploratory
+    maps_to_kwc_cell: "per-stratum mean-return / Sharpe; Ledoit-Wolf pairwise on the same matches"
+    note: "Opdyke/Lo single-strategy CI; Ledoit-Wolf for the fav-vs-underdog comparison"
+  - id: STAT-10
+    name: "STAT §10 assumption checks conditioning the WC verdict"
+    pillar: STAT
+    source: "STAT §10 (ADF/KPSS, Ljung-Box, Jarque-Bera, cross-sectional block)"
+    phase4_task: 10
+    inferential: false
+    correction_layer: none
+    maps_to_kwc_cell: null
+    note: "DECISION-LINKED DIAGNOSTICS, not inferential edge tests; route each rejection to its robust method. Declared non-inferential so they do not consume a K_WC cell."
+  - id: CLV-defined-fraction
+    name: "CLV-defined fraction per universe x era"
+    pillar: STAT
+    source: "Phase 4 method (CLV); Phase 1 task 10"
+    phase4_task: 3
+    inferential: false
+    correction_layer: none
+    maps_to_kwc_cell: null
+    note: "support descriptor for EDGE-7-1; non-inferential."
+
+# ===========================================================================
+# C. CORRECTION METHODS
+# ===========================================================================
+corrections:
+  headline:
+    primary: hansen_spa # Hansen (2005) SPA -- DEFAULT for "is there ANY edge"
+    cross_check: white_reality_check # White (2000) Reality Check
+    which_ones: romano_wolf # Romano-Wolf (2005) stepdown for "which cells"
+    citations:
+      hansen_spa: "Hansen 2005, doi:10.1198/073500105000000063"
+      white_reality_check: "White 2000, doi:10.1111/1468-0262.00152"
+      romano_wolf: "Romano & Wolf 2005"
+  exploratory:
+    method: benjamini_hochberg # BH-FDR over the K_WC exploratory layer
+    applies_to: wc_stratification
+    cannot_upgrade_headline: true
+    citation: "Benjamini & Hochberg 1995; STAT §7"
+
+# ===========================================================================
+# D. DEFLATED-SHARPE N_eff RULE (task 6.2) -- the binding significance denominator
+# ===========================================================================
+# DSR's E[max SR] assumes INDEPENDENT trials while the grid is correlated, so
+# N_eff < N. Two estimators were left open (eigenvalue N_eff vs raw-N). PINNED
+# HERE, before any WC number: conservative RAW-N (count every enumerated family
+# cell as an independent trial). raw-N >= N_eff inflates E[max SR], making the
+# gate HARDER to clear -- the conservative direction -- so DSR is reported as a
+# stated LOWER BOUND on significance. NOT selected after seeing the DSR.
+deflated_sharpe:
+  N_eff_rule: conservative_raw_N
+  N_eff_equals: K # raw-N = the headline family count K
+  dsr_is_lower_bound_on_significance: true
+  rationale: >-
+    raw-N >= N_eff inflates E[max SR] (the conservative direction), so DSR is a
+    lower bound on significance; pre-committed in the register, not chosen after
+    seeing the DSR (plan task 6.2; STAT Open Question 3; STAT §8).
+  hac_inflated_denominator: true # plain IID-non-normal DSR is anti-conservative under serial dep
+  alternative_if_estimated:
+    permitted: false # an estimated N_eff is allowed ONLY if a single citation-backed
+    # rule is frozen here before fitting (Bailey-Lopez de Prado 2014 clustered
+    # trials / trial-return correlation-matrix eigenvalue count). Not adopted.
+    citation_if_used: "Bailey & Lopez de Prado 2014, doi:10.3905/jpm.2014.40.5.094"
+
+# ===========================================================================
+# E. CV FOLD STRUCTURE (methodology.md §2) -- part of the pre-registered family
+# ===========================================================================
+cv:
+  scheme: walk_forward # expanding-window, time-ordered, disjoint (never k-fold)
+  window: expanding
+  fold_boundary: season # folds cut on league-season boundaries (methodology.md §2)
+  n_folds: null # = (number of complete estimation seasons) - 1; fixed in Phase 1 coverage report
+  selection_objective: out_of_fold_drawdown_constrained_growth # methodology.md §2; STAKE §7.3
+  held_out_test_block: fifa_world_cup # final, never-touched fold; scored once
+  selected_per_fold: [tau, phi, c, lambda, tau_tie] # design.md §5 out-of-fold selection set (swept near-tie band, task 4.2)
+  frozen_a_priori_not_selected: [devig_method] # Shin primary; power/basic sensitivities (CALC §4.6)

@@ -1,0 +1,187 @@
+# config/baseline.yaml -- baseline experiment config (config-as-data, ARCH §3.3).
+#
+# NOTE (Phase 0 slice boundary): this file is co-owned. The `seeding` and
+# `identity_hygiene` blocks anchor the reproducibility core (src/seeding.py,
+# src/reprolog.py, the identity-hygiene gate). The `odds`, `selection`,
+# `staking`, and `costs` blocks below are the config skeleton (plan tasks 4, 4.1,
+# 4.2): every tunable grid is a `null` placeholder to be filled by empirical
+# search -- NEVER hand-set (no-magic-number rule, §D.3). The five canonical
+# staking schemes MUST match config/multipletest_family.yaml
+# headline_family.dimensions.staking_scheme BYTE-FOR-BYTE (a four-vs-five
+# mismatch corrupts the K denominator -- plan task 4.1). The de-vig method is
+# frozen a priori (Shin primary) by Phase-0 pre-registration, not searched.
+
+# --- Reproducibility: deterministic RNG (plan task 9.1) ----------------------
+seeding:
+  # The ROOT seed. THE SINGLE no-magic-number EXEMPTION (plan §D.3, task 9.1):
+  # arbitrary-but-fixed, chosen once for reproducibility, recorded in config and
+  # every ReproLog, NEVER tuned, never selected to influence any result.
+  root_seed: 20260616
+  # Fixed named-stage -> spawn-index map. MUST stay byte-identical to
+  # src.seeding.STAGE_SPAWN_MAP and docs/decisions/0005-rng-substream-derivation.md.
+  # Order is FROZEN: append new stages at the next free index; never renumber.
+  stage_spawn_map:
+    ingest: 0
+    validate: 1
+    price: 2
+    stake: 3
+    infer: 4
+    report: 5
+    bootstrap-ci: 6
+    ledoit-wolf: 7
+    ruin-mc: 8
+    vector-kelly: 9
+
+# --- Identity hygiene (plan task 2.1; rules/publishing.md) -------------------
+identity_hygiene:
+  # The SKIE pseudonym git email is NOT known in this environment. The gate
+  # reads the real address from here / the SKIE_GIT_EMAIL env var and FAILS
+  # CLOSED if the placeholder is unset or matches the known real identity.
+  skie_git_email: null # set to the SKIE pseudonym address before first commit
+  skie_git_name: SKIE
+  # Fail-closed denylist: the gate blocks any commit whose author identity,
+  # staged content, or notebook metadata contains these tokens.
+  forbidden_email: skoirala2625@gmail.com
+  forbidden_os_username: skoir
+
+# --- Odds / decision line / de-vig (plan task 4; CALC §2-§4) -----------------
+odds:
+  # Decision line: pre-kickoff CLOSING odds only (no look-ahead; DATA §5).
+  decision_line: closing
+  # De-vig method: FROZEN A PRIORI (Shin primary; power/basic registered as
+  # SENSITIVITY branches, not per-fold selected) -- Phase 0 task 5 / task 6;
+  # CALC §4.6; Stumbelj 2014; Shin 1992/1993. NOT one of the searched
+  # hyperparameters, so it does not enter K (multipletest_family.yaml).
+  devig_method: shin
+  devig_sensitivities: [basic, power]
+  # Season-conditional reference price (DATA §2.1; ADR-0002). Resolved in Phase 1.
+  reference_price: null # PSC* for seasons <= 2024/25, AvgC*/BFEC* for >= 2025/26
+
+# --- Ingest universe + column codes (plan tasks 1, 2, 2.1, 3, 8; DATA §2.1) ---
+# The LEAGUE estimation universe (football-data.co.uk Main leagues) over the
+# closing-odds era. Seasons x divisions are ENUMERATED here (config-as-data); the
+# ingest stage downloads each via the static CSV path scheme
+# https://www.football-data.co.uk/mmz4281/{season}/{div}.csv (DATA §2.1 "Access").
+ingest:
+  data_vendor: football-data.co.uk
+  base_url: "https://www.football-data.co.uk/mmz4281"
+  # 4-digit season compaction (e.g. 2324 = 2023/24). Spans the *C closing-odds
+  # era incl. PSC* (Pinnacle closing back to 2012/13 per data.php) through the
+  # post-2025-07-23-cutover 2025/26 season. The first-viable-coverage season is
+  # established EMPIRICALLY (task 8), not asserted here.
+  seasons: [1920, 2021, 2122, 2223, 2324, 2425, 2526]
+  # Main divisions (DATA §2.1 coverage table: 11 Main-league countries).
+  divisions:
+    [E0, E1, E2, E3, SC0, SC1, SC2, SC3, D1, D2, SP1, SP2, I1, I2, F1, F2, N1, B1, P1, T1, G1]
+  # Closing-AH-Pinnacle column code RESOLVED against the live 2526/E0.csv header
+  # (plan task 2.1, load-bearing): the header reads
+  #   ...AHCh,B365CAHH,B365CAHA,PCAHH,PCAHA,MaxCAHH,... so the code is PCAHH/PCAHA
+  # (the docs' assertion), NOT PAHCH/PAHCA (the literal notes.txt-convention guess).
+  # notes.txt documents only the pre-match PAHH/PAHA + the closing-"C" convention
+  # and does NOT enumerate the closing-AH-Pinnacle code, so the live-header probe
+  # was load-bearing. Ingest FAILS CLOSED if this code is absent (flag
+  # quoted_ah_missing, log a reason) -- never a silent synthetic fallback.
+  quoted_ah_pinnacle_close:
+    home: PCAHH
+    away: PCAHA
+    line: AHCh # closing AH line (market size of handicap, home team)
+  # Season-conditional reference price (DATA §2.1 caveat; ADR-0002). PSC* for
+  # seasons <= 2024/25; AvgC*/MaxC*/BFEC* for >= 2025/26 (Pinnacle feed degraded
+  # 2025-07-23). The cutover season is fixed here; the column lists are the
+  # candidate refC_* sources in priority order for the post-cutover regime.
+  reference_cutover_season: 2526 # first season on the non-Pinnacle reference
+  reference_columns:
+    pinnacle_close: [PSCH, PSCD, PSCA] # <= 2024/25
+    market_avg_close: [AvgCH, AvgCD, AvgCA] # >= 2025/26 primary
+    market_max_close: [MaxCH, MaxCD, MaxCA] # >= 2025/26 fallback (understates margin)
+    betfair_ex_close: [BFECH, BFECD, BFECA] # >= 2025/26 commission-priced fallback
+  # Pre-match (opening proxy) Pinnacle 1X2 for the open->close move distribution
+  # (task 9.1). Present on Main leagues only.
+  prematch_columns: [PSH, PSD, PSA]
+  # >=95% refC coverage threshold for the first-viable-season report (task 8;
+  # DATA Open Question 2). This is a REPORTING threshold from the register inputs
+  # (DATA §3.3 states the 5%/80% power register inputs convention), not a tuned
+  # model hyperparameter; the first viable season is established empirically.
+  coverage_threshold: 0.95
+
+# --- Selection / underdog labelling (plan task 4.2; CALC §2; DATA §5.3) -------
+selection:
+  # Underdog = the side with the higher decimal win price (lower implied p).
+  underdog_definition: higher_decimal_win_price
+  # Near-tie rule (plan task 4.2): design.md §3/§5 FREEZE the swept min_price_gap
+  # (tau_tie) coin-flip band as a searched family dimension; the strict-tie-only
+  # require_strict_underdog branch is the one design.md explicitly rejects, so it is
+  # cleared to false here. The two specs must agree once config freezes (Phase-0
+  # acceptance). min_price_gap stays null (no-magic-number) until the §D.3
+  # walk-forward sensitivity sweep resolves the tau_tie grid; it is registered in
+  # config/multipletest_family.yaml (near_tie_band.included_in_k=true) and counted in K.
+  require_strict_underdog: false # design.md §3 rejects the strict-tie branch; swept band is frozen
+  min_price_gap: null # tau_tie band; resolved by the §D.3 walk-forward sweep before fitting
+  # Underdog-threshold grid `tau`: selected by walk-forward CV, NOT hand-set.
+  underdog_threshold_grid: null
+
+# --- Staking schemes (plan task 4.1; methodology.md §1.2; STAKE §2/§7.1) ------
+# The FIVE canonical schemes. MUST match multipletest_family.yaml
+# headline_family.dimensions.staking_scheme.values byte-for-byte (task 4.1).
+# Every scale parameter is a `null` grid placeholder -- filled by walk-forward
+# CV / bootstrap / drawdown-constrained selection, NEVER hand-set (§D.3).
+staking:
+  schemes: [flat, fixed_fraction, level_to_odds, kelly, fractional_kelly]
+  # fixed_fraction `phi`: the canonical scale-free comparator (STAKE §7.1).
+  phi_grid: null # filled by walk-forward CV
+  # level_to_odds `c`: stake proportional to 1/(d-1) (STAKE §7.1).
+  c_grid: null # filled by walk-forward CV
+  # fractional_kelly `lambda`: data-derived (Bayesian shrinkage 1/(1+CV^2) and/or
+  # the binding BRB drawdown constraint over methodology.md §1.2 (alpha_dd,
+  # beta_dd) grid). Half-Kelly is the prior, NOT the answer (STAKE §4.2-§4.3).
+  lambda_grid: null # filled by the BRB drawdown-constrained solve + CV
+  # kelly / push-Kelly f*: closed-form (STAKE §3.2); negative-edge -> f*=0.
+  negative_edge_stake_zero: true
+
+# --- Transaction-cost / execution model placeholder (plan task 7.1; ADR-0004) -
+# The `costs` block the execution-cost model populates in Phase 3 task 9. NO
+# ROI/Sharpe/growth number is reported as net until this block is populated and
+# applied (Phase 4/5 acceptance). Every value is a `null` placeholder to be
+# data-selected (§D.3), NOT a magic number.
+costs:
+  # (i) Per-leg slippage: a data-selected QUANTILE of the absolute open->close
+  #     move distribution (Phase 1 task 9.1), per division-season x reference
+  #     regime x odds bucket. NOT asserted.
+  slippage_quantile: null # selected from the open->close move distribution (§D.3)
+  # (ii) Leg-out assumption for the two-leg synthetic DNB. Default: atomic
+  #      two-leg fill at the closing line (an idealization), stress-tested by a
+  #      one-tick adverse move on the second leg.
+  legout_model: atomic_two_leg_fill # idealization; stress branch below
+  one_tick_adverse_stress: true # report net metrics under BOTH branches
+  # (iii) Betfair-exchange commission (2-5%, DATA §2.3) converted to an effective
+  #       overround and reconciled with the M_1X2 - M_AH wedge (CALC §3.5).
+  bfec_commission_rate: null # config tunable, documented selection (§D.3); not a literal
+  net_of_cost_required_before_reporting: true
+
+# --- World-Cup hold-out (plan tasks 4, 5, 10; DATA §2.2, §7) ------------------
+# The WC is the never-touched held-out test block. There is NO clean public WC
+# ODDS source obtainable headlessly (OddsPortal JS/ToS; every Kaggle/GitHub/
+# Zenodo odds set is football-data.co.uk DOMESTIC-only -- verified 2026-06-16),
+# so the transfer test is PENDING-ODDS. The RESULTS panel (90-min FTR + qual-
+# state) is built from accessible sources and cross-reconciled. When a WC-odds
+# snapshot is later frozen (run-once scrape, src/scrape_wc_odds.py), pin its
+# checksummed filename here as the canonical, reproducible-from-snapshot input.
+wc_holdout:
+  editions: [2002, 2006, 2010, 2014, 2018, 2022] # 6 x 64 = 384 (DATA §3.2)
+  # RESULTS sources (directly downloadable; provenance + .sha256 in data/raw/).
+  results_settlement_source: jfjelstul/worldcup # matches.csv + goals.csv (90-min)
+  results_crosscheck_source: martj42/international_results # independent check
+  # 90-min FTR is reconstructed from jfjelstul goals.csv match_period (regulation
+  # goals only; extra-time/penalty goals excluded). A penalty-decided level match
+  # -> DNB push (CALC §10).
+  settlement_basis: ninety_minute_ftr
+  # ODDS snapshot: pinned by CHECKSUM (not source URL) once frozen. Null = gap.
+  odds_snapshot_file: null # data/raw/wc_odds_<snapshot_date>.csv once obtained
+  odds_snapshot_sha256: null # the canonical reproducible-from-snapshot hash
+  odds_status: pending # 'pending' until a ToS-cleared run-once scrape is frozen
+
+# --- Inference seed mirror ---------------------------------------------------
+inference:
+  # `seed` mirrors seeding.root_seed for ARCH §3.3 compatibility; the canonical
+  # source is seeding.root_seed above.
+  seed: 20260616

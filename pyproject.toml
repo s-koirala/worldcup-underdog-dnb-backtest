@@ -1,0 +1,86 @@
+[project]
+name = "worldcup-underdog-dnb-backtest"
+version = "0.0.0"
+description = "Backtest of a FIFA World Cup underdog Draw-No-Bet strategy on an expanded domestic-league estimation universe with a held-out World Cup block."
+readme = "README.md"
+# HARD ENVIRONMENT FACT (Phase 0 task 1a): Python 3.11.9 is the only interpreter.
+# A tight single-minor band; the lockfile pins the exact ==3.11.9 build.
+# 3.11 is chosen because numpy/scipy/arch/cvxpy/statsmodels/pyarrow all ship
+# binary cp311 Windows wheels (the four native-heavy deps the plan task 1a names);
+# do not adopt a newer minor until all four ship wheels for it.
+requires-python = ">=3.11,<3.12"
+
+# Phase 0 task 1b: every DIRECT dependency pinned with exact == in the
+# human-readable manifest. uv.lock carries the full resolved transitive graph
+# (uv.lock alone is not human-auditable for this == requirement).
+# Versions are the latest stable releases that ship cp311 Windows wheels as of
+# the 2026-06-16 snapshot; adjust the pin and document in the ADR if a wheel fails.
+dependencies = [
+    "numpy==2.2.6",
+    "pandas==2.3.1",
+    "scipy==1.15.3",
+    "arch==7.2.0",
+    "cvxpy==1.6.6",
+    "statsmodels==0.14.5",
+    "matplotlib==3.10.3",
+    "openpyxl==3.1.5",
+    "pandera==0.25.0",
+    "pydantic==2.11.7",
+    "hypothesis==6.135.26",
+    "pyyaml==6.0.2",
+    "pyarrow==20.0.0",
+]
+
+# Dev tooling as a PEP 735 dependency group (NOT an optional-dependencies extra):
+# the `dev` group is synced by DEFAULT by `uv sync --frozen` (no `--extra`/`--group`
+# flag needed), so the Phase-0 acceptance commands `uv run pytest` / `uv run ruff
+# check` resolve the PINNED project tools (pytest==8.4.1, ruff==0.12.4) inside
+# .venv rather than falling through to a global system install. Every tool stays
+# exact-`==`-pinned in this human-readable manifest (plan task 1b) and in uv.lock.
+[dependency-groups]
+dev = [
+    "ruff==0.12.4",
+    "pytest==8.4.1",
+    "nbstripout==0.8.1",
+    "nbqa==1.9.1",
+    "pre-commit==4.2.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+# --------------------------------------------------------------------------
+# ruff (Phase 0 task 2; lint + format). CI fails on any lint error (ARCH §3.4).
+# --------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# Phase 0 task 10a: no os.path string concatenation; flake8-use-pathlib (PTH)
+# steers every path operation to pathlib.Path. flake8-no-pep420 (INP) keeps
+# packages importable. NPY enforces the modern numpy Generator API and flags
+# legacy global np.random use (Phase 0 task 9.1 "no global np.random").
+select = ["E", "F", "I", "UP", "B", "PTH", "NPY", "INP", "SIM", "RUF"]
+# NPY002: legacy np.random.* (mtrand) singleton is forbidden project-wide.
+ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+# Tests may import the OS-username / real-email string literals to exercise the
+# identity-hygiene gate (Phase 0 task 2.1) and the no-absolute-path grep test
+# (task 10a) deliberately contains "C:\\" / "/Users/" needles.
+"tests/*" = ["E501", "S105", "S106"]
+
+# --------------------------------------------------------------------------
+# pytest (Phase 0 task 2).
+# --------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+filterwarnings = ["error"]
