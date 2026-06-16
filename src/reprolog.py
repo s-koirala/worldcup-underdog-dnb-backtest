@@ -11,10 +11,9 @@ Single source of truth for the 13 keys is config/reprolog_schema.json; this
 pydantic model mirrors it, and emit() validates the serialized record against
 that committed JSON Schema BY KEY NAME (not by asserting a bare integer 13).
 
-Pre-first-commit state: the repo currently has zero commits and a deliberately
-unset git author identity, so a commit fails by design. emit() handles that
-gracefully -- git_head is null (or "UNCOMMITTED") and git_dirty is true -- so the
-Phase 0 --dry-run works with zero commits (global rule 2).
+Pre-first-commit state: emit() handles a repo with no commits gracefully --
+git_head is null (or "UNCOMMITTED") and git_dirty is true -- so --dry-run works
+before the first commit. Once the repo is committed, git_head is the HEAD SHA.
 """
 
 from __future__ import annotations

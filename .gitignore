@@ -5,6 +5,9 @@ __pycache__/
 .uv/
 *.egg-info/
 .ipynb_checkpoints/
+.hypothesis/
+.pytest_cache/
+.ruff_cache/
 
 # Data (raw/processed are large and/or license-restricted; track checksums, not bytes)
 data/raw/*

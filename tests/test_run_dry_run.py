@@ -31,7 +31,10 @@ def test_dry_run_emits_schema_valid_reprolog(tmp_path):
     assert record["config_resolved_sha256"] is not None
     assert len(record["config_resolved_sha256"]) == 64
     assert record["git_dirty"] is True
-    assert record["git_head"] is None or record["git_head"] == reprolog.UNCOMMITTED
+    # git_head is null/sentinel before the first commit, the real HEAD SHA afterwards
+    # (the committed Phase 0-1 case); the nullable key is schema-valid either way.
+    head = record["git_head"]
+    assert head is None or head == reprolog.UNCOMMITTED or len(head) >= 7
 
 
 def test_two_same_seed_runs_give_identical_config_sha(tmp_path):

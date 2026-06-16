@@ -10,7 +10,27 @@ built and verified via multi-agent audit-remediate workflows.
 
 ## [Unreleased]
 
-- Phase 2 (DNB construction, underdog labelling, 90-minute settlement) — next.
+- Phase 3 (staking grid + bankroll / risk-of-ruin simulation) — next.
+
+## [0.2.0] - 2026-06-16 — Phase 2: DNB construction, underdog labelling, 90-minute settlement
+
+### Added
+- `src/pricing.py`: synthetic DNB identity `o_DNB = W·(D−1)/D` (reconciled bit-for-bit with the ingest
+  arithmetic on 49,687 rows; `matches.parquet` content SHA unchanged); `implied_probs`/overround; a
+  de-vig dispatcher (`basic`/`shin`/`power`, Shin default) returning fair simplex probabilities; the
+  conditional `q_W = p_W/(1−p_D)`; and the synthetic-vs-quoted margin wedge. Shin runs on the three-way
+  1X2 book — under-round draw-dropped residuals are rejected fail-closed.
+- `src/selection.py` (underdog = higher decimal win price; the frozen near-tie branch) and
+  `src/settlement.py` (three-way 90-minute DNB map; knockout extra-time/penalty draws settle as a push;
+  void → refund, excluded from the win-ratio denominator).
+- EV, three-point `Var_DNB`, and the push-Kelly fraction `f*` closed forms (negative edge → `f*=0`;
+  degenerates to two-outcome Kelly as the draw probability → 0).
+- Estimator-verification gate: Shin `z` reproduced against the Jullien–Salanié closed form (three-way
+  z=0.0279; two-way matched to ~1e-9). Unit + Hypothesis property tests (195 total).
+
+### Fixed
+- `test_reprolog` / `test_run_dry_run` git-head assertions updated for the committed-repo state (they
+  previously assumed the pre-first-commit zero-commit state).
 
 ## [0.1.0] - 2026-06-16 — Phase 1: data acquisition and validation
 

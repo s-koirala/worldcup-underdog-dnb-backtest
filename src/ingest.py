@@ -45,6 +45,7 @@ import numpy as np
 import pandas as pd
 import pandera.pandas as pa
 
+from src.pricing import synthetic_dnb
 from src.reprolog import sha256_text
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -432,14 +433,14 @@ def attach_reference_price(
         np.where(refc_a >= refc_h, "away", "home"),
         None,
     )
-    # synthetic DNB on the underdog side: o = side_price * (D - 1) / D  (DATA §1.2)
+    # synthetic DNB on the underdog side: o = side_price * (D - 1) / D  (DATA §1.2;
+    # CALC §3.1-§3.3). Single source of truth is src.pricing.synthetic_dnb -- its array
+    # path is arithmetic-identical to the former inline expression (verified bit-for-bit
+    # on the panel: 0 mismatches across 49,687 league rows; matches.parquet content SHA
+    # unchanged after this refactor). Do NOT reinline / "simplify" -- algebraically equal
+    # forms can differ in the last ULP and would change the panel hash.
     under_price = np.where(refc_a >= refc_h, refc_a, refc_h)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        df["o_dnb_underdog"] = np.where(
-            refc_d.notna() & (refc_d > 0),
-            under_price * (refc_d - 1.0) / refc_d,
-            np.nan,
-        )
+    df["o_dnb_underdog"] = synthetic_dnb(under_price, refc_d.to_numpy(dtype="float64"))
     vf.df = df
     return vf
 

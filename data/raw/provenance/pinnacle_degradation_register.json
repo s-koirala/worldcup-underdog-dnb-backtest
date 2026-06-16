@@ -18,12 +18,12 @@
   "register_type": "pinnacle_degradation_notice",
   "sources": {
     "data_php.html": {
-      "bytes": 52602,
+      "from_archive": true,
       "sha256": "8cce00d58aa78832cd5a66d1713ad59d36fa25f71740034b76b3d8b4c4612c7e",
       "url": "https://www.football-data.co.uk/data.php"
     },
     "notes.txt": {
-      "bytes": 7316,
+      "from_archive": true,
       "sha256": "f18ea847dbc1a4572dcfbd7dac87b7e5b56a55cb3926acfa4aefd57d67723766",
       "url": "https://www.football-data.co.uk/notes.txt"
     }

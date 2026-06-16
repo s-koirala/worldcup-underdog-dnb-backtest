@@ -82,10 +82,14 @@ def test_validate_record_rejects_extra_key(tmp_path):
         reprolog.validate_record(record)
 
 
-def test_zero_commit_git_head_is_null_by_default():
-    # The repo has zero commits; git_head must resolve to None (global rule 2).
+def test_git_head_null_in_zero_commit_else_real_sha():
+    # Contract (module docstring; global rule 2): in the pre-first-commit state
+    # git_head resolves to None (or the UNCOMMITTED sentinel); once the repo has a
+    # commit it is the real HEAD SHA (>= 7 hex chars). Both are schema-valid for the
+    # nullable git_head key. The repo is committed at/after Phase 0-1, so a real SHA
+    # is the expected value here; the null branch remains covered for a fresh repo.
     head = reprolog.git_head()
-    assert head is None or head == reprolog.UNCOMMITTED
+    assert head is None or head == reprolog.UNCOMMITTED or len(head) >= 7
 
 
 def test_zero_commit_sentinel_branch():
@@ -100,9 +104,13 @@ def test_git_dirty_true_in_zero_commit_state():
     assert reprolog.git_dirty() is True
 
 
-def test_build_handles_zero_commit(tmp_path):
+def test_build_records_git_head_null_or_real_sha(tmp_path):
+    # build() collects git_head safely in BOTH states: null/sentinel before the first
+    # commit, the real HEAD SHA afterwards (the committed Phase 0-1 case). The record
+    # is schema-valid either way; git_dirty is True while the working tree is dirty.
     record = _build(tmp_path).to_record()
-    assert record["git_head"] is None
+    head = record["git_head"]
+    assert head is None or head == reprolog.UNCOMMITTED or len(head) >= 7
     assert record["git_dirty"] is True
     reprolog.validate_record(record)
 

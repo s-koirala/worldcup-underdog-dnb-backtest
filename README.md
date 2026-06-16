@@ -18,6 +18,10 @@ Each phase is built and verified by a multi-agent audit-remediate workflow.
   Pinnacle/consensus closing reference) + 384 World-Cup hold-out (2002–2022; results from
   jfjelstul/martj42, 90-minute FTR reconstructed). World-Cup **odds** have no public source,
   so the transfer test is pending-odds and the league universe carries the estimation. 109 tests.
+- **Phase 2 — DNB core:** [src/pricing.py](src/pricing.py) (synthetic DNB `o = W·(D−1)/D`, Shin/power/basic
+  de-vig with a reproduced Shin-`z` estimator gate), [src/selection.py](src/selection.py) (underdog
+  labelling), [src/settlement.py](src/settlement.py) (90-minute three-way settlement; knockout draw →
+  push), and the EV / variance / push-Kelly closed forms. Reconciled bit-for-bit against the panel. 195 tests.
 
 ## Project thesis and honest prior
 
