@@ -257,3 +257,254 @@ def two_outcome_kelly(p_win: npt.ArrayLike, o: npt.ArrayLike) -> npt.NDArray[np.
     oo = np.asarray(o, dtype="float64")
     out = (p * oo - 1.0) / (oo - 1.0)
     return float(out) if np.ndim(out) == 0 else out
+
+
+# ===========================================================================
+# Phase 3 task 1 -- the FIVE staking SCHEMES as stake-sizing functions of
+# (o_dnb, p, bankroll_before) ONLY (STAKE §2, §7.1; ARCH §2.2 staking contract;
+# STAT §9.2 non-anticipation property).
+# ===========================================================================
+#
+# NON-ANTICIPATION (load-bearing, the property test in test_staking_schemes.py
+# enforces it): every stake below is a pure function of the pre-kickoff signal
+# tuple ``(o_dnb, p_win, p_draw, bankroll_before)`` and the scheme's free
+# parameter. NONE of them reads the realised result (settle_disposition,
+# settle_net_profit, FTR, ...). Permuting the *future* outcomes therefore can
+# never change any stake -- the formal statement of "a stake is a function of
+# (o_dnb, p, bankroll_before) only" (slice brief; STAT §9.2).
+#
+# Each function returns the CASH stake ``s_t`` for one bet given the bankroll
+# *before* that bet (``bankroll_before``), so the ledger (src.ledger) can apply
+# ``W_t = W_{t-1} + s_t * r_t`` with ``r_t`` the settled net-return multiple
+# (settlement.py). flat takes a unit ``k``; fixed_fraction a fraction ``phi``;
+# level_to_odds a target-profit ``c``; kelly the push-Kelly ``f*``;
+# fractional_kelly ``lambda * f*``. The fraction-of-current-bankroll schemes
+# (fixed_fraction / kelly / fractional_kelly) multiply by ``bankroll_before``;
+# flat and level_to_odds are scale-free cash stakes that do not (STAKE §2 table).
+
+# The canonical scheme set, byte-identical to config/baseline.yaml staking.schemes
+# and config/multipletest_family.yaml headline_family.dimensions.staking_scheme
+# (a four-vs-five mismatch corrupts the K denominator -- plan task 4.1).
+STAKING_SCHEMES: tuple[str, ...] = (
+    "flat",
+    "fixed_fraction",
+    "level_to_odds",
+    "kelly",
+    "fractional_kelly",
+)
+
+
+def stake_flat(
+    o_dnb: npt.ArrayLike,
+    p_win: npt.ArrayLike,
+    p_draw: npt.ArrayLike,
+    bankroll_before: npt.ArrayLike,
+    *,
+    unit: float,
+) -> npt.NDArray[np.float64] | float:
+    """Flat / level stake ``s_t = unit`` (STAKE §2: constant cash unit).
+
+    The level-stake comparator: a constant cash unit per bet, independent of odds,
+    edge, or bankroll. Additive (non-compounding) dynamics. Takes the full
+    ``(o_dnb, p_win, p_draw, bankroll_before)`` signal tuple for a UNIFORM scheme
+    signature (the ledger calls every scheme the same way) but uses none of it --
+    which is exactly the "sizing varies with odds? No" row of the STAKE §2 table.
+
+    ``unit`` is the level cash stake ``k``; a config tunable (no magic number).
+    Broadcast to the shape of ``o_dnb`` so the vectorised ledger path matches the
+    scalar path.
+    """
+    shape_like = np.asarray(o_dnb, dtype="float64")
+    out = np.full_like(shape_like, float(unit), dtype="float64")
+    return float(out) if out.ndim == 0 else out
+
+
+def stake_fixed_fraction(
+    o_dnb: npt.ArrayLike,
+    p_win: npt.ArrayLike,
+    p_draw: npt.ArrayLike,
+    bankroll_before: npt.ArrayLike,
+    *,
+    phi: float,
+) -> npt.NDArray[np.float64] | float:
+    """Fixed-fraction stake ``s_t = phi * bankroll_before`` (STAKE §2, §7.1).
+
+    The canonical scale-free "flat" comparator: a constant fraction ``phi`` of the
+    CURRENT bankroll, independent of odds/edge (STAKE §7.1 "constant fraction
+    regardless of price/edge"). Multiplicative dynamics -- directly comparable to
+    Kelly (also a fraction of current bankroll). ``phi`` is swept on the
+    walk-forward grid (config staking.phi_grid; no magic number).
+    """
+    w = np.asarray(bankroll_before, dtype="float64")
+    out = float(phi) * w
+    return float(out) if np.ndim(out) == 0 else out
+
+
+def stake_level_to_odds(
+    o_dnb: npt.ArrayLike,
+    p_win: npt.ArrayLike,
+    p_draw: npt.ArrayLike,
+    bankroll_before: npt.ArrayLike,
+    *,
+    c: float,
+) -> npt.NDArray[np.float64] | float:
+    """Level-stake-to-odds ``s_t = c / (d - 1)`` with ``d = o_dnb`` (STAKE §2, §7.1).
+
+    Equalises the *target profit* ``c`` per bet: stake ``proportional to 1/(d-1)``,
+    so MORE on shorter prices / LESS on longer prices -- the opposite tilt to Kelly
+    when edge is concentrated in longshots (STAKE §2). Scale-free cash stake (does
+    NOT scale with bankroll). ``c`` is the swept target-profit grid
+    (config staking.c_grid). ``b = d - 1`` is the net win odds; a non-positive or
+    null ``b`` (degenerate price) yields NaN, never a fabricated stake.
+    """
+    b = np.asarray(o_dnb, dtype="float64") - 1.0
+    with np.errstate(divide="ignore", invalid="ignore"):
+        out = np.where(np.isfinite(b) & (b > 0.0), float(c) / b, np.nan)
+    return float(out) if out.ndim == 0 else out
+
+
+def stake_kelly(
+    o_dnb: npt.ArrayLike,
+    p_win: npt.ArrayLike,
+    p_draw: npt.ArrayLike,
+    bankroll_before: npt.ArrayLike,
+) -> npt.NDArray[np.float64] | float:
+    """Full push-Kelly stake ``s_t = f*(p, o_dnb) * bankroll_before`` (STAKE §3.2, §7.1).
+
+    Reuses the Phase-2 :func:`push_kelly_fraction` (the clipped, no-short ``f*``):
+    the stake is the Kelly fraction of the CURRENT bankroll. Endogenous,
+    edge-proportional sizing -- tilts toward high-edge bets (STAKE §7.1). The
+    negative-edge branch is inherited from ``push_kelly_fraction``: ``f* = 0`` ->
+    stake 0 (no short side; the honest-prior all-negative-edge case, slice brief /
+    STAKE §7.3). No free parameter (uses ``p, o`` directly).
+    """
+    f = push_kelly_fraction(p_win, p_draw, o_dnb, clip_negative=True)
+    w = np.asarray(bankroll_before, dtype="float64")
+    out = np.asarray(f, dtype="float64") * w
+    return float(out) if out.ndim == 0 else out
+
+
+def stake_fractional_kelly(
+    o_dnb: npt.ArrayLike,
+    p_win: npt.ArrayLike,
+    p_draw: npt.ArrayLike,
+    bankroll_before: npt.ArrayLike,
+    *,
+    lam: float,
+) -> npt.NDArray[np.float64] | float:
+    """Fractional-Kelly stake ``s_t = lam * f*(p, o_dnb) * bankroll_before`` (STAKE §4, §7.1).
+
+    The deployable rule: a fractional multiplier ``lam in (0, 1]`` on the full
+    push-Kelly stake. ``lam`` is DATA-DERIVED (Bayesian shrinkage
+    ``lam ~ 1/(1+CV^2)``, :func:`shrinkage_lambda`, and/or the binding BRB
+    drawdown constraint over the methodology.md §1.2 ``(alpha_dd, beta_dd)`` grid,
+    :func:`brb_bound_exponent` + the drawdown-constrained solve in src.ruin) --
+    NEVER hand-set; half-Kelly is the PRIOR, not the answer (STAKE §4.2-§4.3).
+    Negative edge -> ``f* = 0`` -> stake 0 (inherited from push_kelly_fraction).
+    """
+    f = push_kelly_fraction(p_win, p_draw, o_dnb, clip_negative=True)
+    w = np.asarray(bankroll_before, dtype="float64")
+    out = float(lam) * np.asarray(f, dtype="float64") * w
+    return float(out) if out.ndim == 0 else out
+
+
+# Dispatch table: scheme name -> (sizing function, set of required keyword params).
+# The required-param set lets src.ledger validate that the per-scheme parameter is
+# present (and a single source of truth for which schemes carry a free parameter).
+_SCHEME_DISPATCH = {
+    "flat": (stake_flat, ("unit",)),
+    "fixed_fraction": (stake_fixed_fraction, ("phi",)),
+    "level_to_odds": (stake_level_to_odds, ("c",)),
+    "kelly": (stake_kelly, ()),
+    "fractional_kelly": (stake_fractional_kelly, ("lam",)),
+}
+
+
+def stake(
+    scheme: str,
+    o_dnb: npt.ArrayLike,
+    p_win: npt.ArrayLike,
+    p_draw: npt.ArrayLike,
+    bankroll_before: npt.ArrayLike,
+    **params: float,
+) -> npt.NDArray[np.float64] | float:
+    """Dispatch to one of the five staking schemes by name (STAKE §2, §7.1).
+
+    The single entry point the ledger calls. ``scheme`` in
+    :data:`STAKING_SCHEMES`; ``params`` carries the scheme's free parameter
+    (``unit`` / ``phi`` / ``c`` / ``lam``; ``kelly`` takes none). Raises on an
+    unknown scheme or a missing/extra parameter rather than silently mis-sizing.
+
+    Non-anticipation: the call signature contains ONLY the pre-kickoff signal
+    ``(o_dnb, p_win, p_draw, bankroll_before)`` and the parameter -- there is no
+    channel through which a result could enter a stake.
+    """
+    if scheme not in _SCHEME_DISPATCH:
+        raise ValueError(f"unknown staking scheme {scheme!r}; expected one of {STAKING_SCHEMES}")
+    fn, required = _SCHEME_DISPATCH[scheme]
+    missing = set(required) - set(params)
+    extra = set(params) - set(required)
+    if missing:
+        raise ValueError(
+            f"staking scheme {scheme!r} missing required parameter(s): {sorted(missing)}"
+        )
+    if extra:
+        raise ValueError(f"staking scheme {scheme!r} got unexpected parameter(s): {sorted(extra)}")
+    return fn(o_dnb, p_win, p_draw, bankroll_before, **params)
+
+
+# ===========================================================================
+# Phase 3 task 5 -- data-derived fractional-Kelly multiplier lambda (STAKE §4.2,
+# §6.2). lambda is NOT hand-set: it is either the Bayesian-shrinkage
+# 1/(1+CV^2) certainty-equivalent (estimation-error route, §4.2) or the multiplier
+# at which the Busseti-Ryu-Boyd drawdown constraint binds (risk-control route,
+# §6.2 -- the binding solve lives in src.ruin, which consumes brb_bound_exponent).
+# ===========================================================================
+
+
+def shrinkage_lambda(
+    edge: npt.ArrayLike, edge_sd: npt.ArrayLike
+) -> npt.NDArray[np.float64] | float:
+    """Bayesian-shrinkage fractional-Kelly multiplier ``lam = 1/(1 + CV^2)`` (STAKE §4.2).
+
+    Under a Gaussian posterior on the edge, the certainty-equivalent optimal Kelly
+    fraction shrinks toward 0 as the coefficient of variation
+    ``CV = edge_sd/edge`` of the *estimated edge* rises (MacLean-Ziemba-Blazenko
+    1992; STAKE §4.2): ``lam = 1/(1 + (edge_sd/edge)^2) = edge^2/(edge^2 +
+    edge_sd^2)``. A unit signal-to-noise ratio (``CV = 1``) gives ``lam = 0.5``
+    (half-Kelly as a *consequence*, not an assertion -- STAKE §4.2-§4.3). This
+    makes ``lam`` a DATA-DERIVED quantity (the edge and its sampling SD come from
+    the calibration/bootstrap), the slice brief's "data-derived lambda" route.
+
+    ``edge`` here is the per-bet expected return ``mu`` (or a strategy-level mean
+    edge); a non-positive edge yields ``lam = 0`` (no positive-edge stake to
+    fractionate -- consistent with the f*=0 no-bet branch). ``edge_sd >= 0``.
+    """
+    e = np.asarray(edge, dtype="float64")
+    s = np.asarray(edge_sd, dtype="float64")
+    with np.errstate(divide="ignore", invalid="ignore"):
+        lam = np.where(e > 0.0, e * e / (e * e + s * s), 0.0)
+    out = np.asarray(lam, dtype="float64")
+    return float(out) if out.ndim == 0 else out
+
+
+def brb_bound_exponent(alpha_dd: float, beta_dd: float) -> float:
+    """Busseti-Ryu-Boyd drawdown-bound exponent ``theta = log(beta_dd)/log(alpha_dd)`` (STAKE §6.2).
+
+    For the drawdown target "no more than ``beta_dd`` probability of the running-
+    minimum wealth ever falling below ``alpha_dd`` of bankroll", BRB (2016) eq. (9)
+    gives the bound exponent ``theta = log beta_dd / log alpha_dd`` (their notation;
+    ``> 1`` for any nontrivial target). The fractional multiplier ``lam < 1`` is
+    then the value at which the constraint ``E[(r^T b)^{-theta}] <= 1`` BINDS (the
+    binding solve is the empirical-bootstrap bisection in src.ruin; this helper
+    supplies the exponent it solves at). ``theta`` is the risk-aversion STRICTNESS,
+    NOT the bet size (the STAKE §6.2 notation guard: do not read theta as lambda).
+
+    Worked (STAKE §6.2): ``alpha_dd=0.5, beta_dd=0.1 -> theta = log0.1/log0.5 =
+    3.3219``. Requires ``alpha_dd, beta_dd in (0, 1)``.
+    """
+    if not (0.0 < alpha_dd < 1.0):
+        raise ValueError(f"alpha_dd (drawdown floor) must be in (0,1), got {alpha_dd}")
+    if not (0.0 < beta_dd < 1.0):
+        raise ValueError(f"beta_dd (breach probability) must be in (0,1), got {beta_dd}")
+    return float(np.log(beta_dd) / np.log(alpha_dd))

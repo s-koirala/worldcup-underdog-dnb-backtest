@@ -606,10 +606,12 @@ def open_close_moves(
         sub["refC_H"].to_numpy(),
     )
     sub = sub.assign(_under_price=under_price)
+    bucket_edges: list[float] = []
     try:
-        sub["_odds_bucket"] = pd.qcut(
-            sub["_under_price"], q=n_buckets, labels=False, duplicates="drop"
+        sub["_odds_bucket"], _edges = pd.qcut(
+            sub["_under_price"], q=n_buckets, labels=False, duplicates="drop", retbins=True
         )
+        bucket_edges = [round(float(e), 6) for e in np.asarray(_edges, dtype="float64")]
     except ValueError:
         sub["_odds_bucket"] = 0
 
@@ -637,6 +639,13 @@ def open_close_moves(
     return {
         "n_observable": n_obs,
         "n_buckets": n_buckets,
+        # The empirical-quantile EDGES of the underdog price that define the odds
+        # buckets above. Persisted so a bet's bucket label is reproducibly assignable
+        # downstream (src.costs.resolve_odds_bucket) -- the per-bucket slippage is
+        # applied per bet by mapping its underdog price into these edges, never a
+        # hard-coded band (ADR-0004; Phase-3 task 9 "per ... odds bucket"). The edges
+        # are pre-kickoff closing-price quantiles, so the assignment is non-anticipating.
+        "odds_bucket_edges": bucket_edges,
         "pooled": _summ(sub["_abs_open_close_move"]),
         "by_reference_regime": by_regime,
         "by_odds_bucket": by_bucket,

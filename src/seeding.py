@@ -5,8 +5,10 @@ Phase 0 task 9.1 (plan §C, plan §D.4; ARCH §3.2 "Determinism guarantees").
 The project runs several *independent* resampling engines, each under its own
 per-stage entrypoint (Phase 0 task 9): the matchday-block bootstrap ruin
 Monte-Carlo (Phase 3 task 4), the stationary bootstrap for CIs (Phase 4 task 4),
-the Ledoit-Wolf pairwise bootstrap (Phase 4 task 4), and the vector-Kelly
-Monte-Carlo (Phase 3 task 3). Reusing one *mutable* ``Generator`` across stages
+and the Ledoit-Wolf pairwise bootstrap (Phase 4 task 4). (The ``vector-kelly``
+slot is RESERVED for a future scenario-resampled evaluation but is currently
+UNUSED: the deployed vector-Kelly path is a deterministic convex program with no
+rng draw -- see ADR-0005 and src.vector_kelly.) Reusing one *mutable* ``Generator`` across stages
 would make a stage's draws depend on whether upstream stages ran first in the
 same process, breaking the per-stage reproducibility the acceptance criteria
 require.
@@ -52,7 +54,9 @@ STAGE_SPAWN_MAP: Mapping[str, int] = {
     "bootstrap-ci": 6,  # stationary bootstrap for CIs (Phase 4 task 4)
     "ledoit-wolf": 7,  # Ledoit-Wolf pairwise Sharpe-difference bootstrap (Phase 4 task 4)
     "ruin-mc": 8,  # matchday-block bootstrap ruin Monte-Carlo (Phase 3 task 4)
-    "vector-kelly": 9,  # vector-Kelly Monte-Carlo (Phase 3 task 3)
+    # RESERVED, currently UNUSED: the deployed vector-Kelly path is a deterministic convex
+    # program (no rng draw); slot kept for a future scenario-resampled eval (ADR-0005).
+    "vector-kelly": 9,
 }
 
 

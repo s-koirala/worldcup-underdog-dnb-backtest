@@ -10,7 +10,34 @@ built and verified via multi-agent audit-remediate workflows.
 
 ## [Unreleased]
 
-- Phase 3 (staking grid + bankroll / risk-of-ruin simulation) — next.
+- Phase 4 (inference: bootstrap CIs, multiple-testing gate, deflated Sharpe, walk-forward) — next.
+
+## [0.3.0] - 2026-06-16 — Phase 3: staking grid + bankroll / risk-of-ruin simulation
+
+### Added
+- `src/staking.py`: five non-anticipating stake-sizing schemes (flat, fixed_fraction φ, level_to_odds c,
+  push-Kelly f*, fractional λ·f*); data-derived λ (shrinkage 1/(1+CV²) — half-Kelly emerges at CV=1, not asserted).
+- `src/costs.py`: transaction-cost / execution model — per-leg slippage calibrated from the Phase-1 open→close
+  move distribution (pooled p50 = 5.23%; p90/p95/p99 stress ladder), atomic-fill idealization + one-tick adverse
+  leg-out stress, BFEC commission (3.5% midpoint) → effective overround reconciled with the +0.80% margin wedge.
+- `src/ledger.py`: chronological PnL ledger sizing from the net bankroll-before (non-anticipation); every entry
+  carries gross and net PnL; conservation asserted on the 49,628-bet panel.
+- `src/vector_kelly.py`: concurrent-matchday convex vector-Kelly (cvxpy/Clarabel) + renormalised-capped deployable
+  approximation + growth-gap + a G-test of concurrent-outcome independence.
+- `src/ruin.py` + `src/frontier.py`: matchday-block bootstrap risk-of-ruin / minimum-bankroll engine (seeded
+  `ruin-mc` substream, B=1e4 from a precision target), Busseti–Ryu–Boyd drawdown-constrained λ + risk-constrained
+  Kelly (RCK), and the growth–drawdown frontier (the F-07/08/09, T-04/05/06 engine).
+- Non-anticipation property tests, ledger conservation, ruin-engine order-independence; 279 tests total.
+
+### Result (honest prior, not engineered around)
+- Under the a-priori-frozen Shin de-vig, **0 of 49,628 settleable league bets are positive-EV**, so full push-Kelly
+  sizes `f*=0` on every bet → `λ*=0` ("do not bet") with flat equity. Odds-agnostic fixed-fraction staking loses
+  (gross 0.73 / net 0.60), net < gross as execution costs bite — confirming the schemes and cost hook behave
+  correctly on a guaranteed-negative-EV strategy.
+
+### Notes
+- README gained a "Running the pipeline" section: the stake stage hard-imports cvxpy via `src/vector_kelly.py`,
+  so runs must use `uv run` (the pinned env), not a bare system interpreter.
 
 ## [0.2.0] - 2026-06-16 — Phase 2: DNB construction, underdog labelling, 90-minute settlement
 

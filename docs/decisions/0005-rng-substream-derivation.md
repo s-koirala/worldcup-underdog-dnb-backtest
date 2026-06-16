@@ -15,8 +15,10 @@ superseded_by: ""
 The project runs several **independent** resampling engines, each under its own per-phase
 entrypoint (plan task 9) and each emitting its own ReproLog: the matchday-block bootstrap
 ruin Monte-Carlo (Phase 3 task 4, `B = 10⁴`), the stationary bootstrap for CIs (Phase 4
-task 4), the Ledoit-Wolf pairwise bootstrap (Phase 4 task 4), and the vector-Kelly
-Monte-Carlo (Phase 3 task 3). Because each stage is **independently runnable**, reusing one
+task 4), and the Ledoit-Wolf pairwise bootstrap (Phase 4 task 4). (A `vector-kelly`
+sub-stream is reserved for a possible future scenario-resampled vector-Kelly evaluation but
+is **not currently consumed** — the deployed vector-Kelly path is a deterministic convex
+program; see the reserved-slot note below.) Because each stage is **independently runnable**, reusing one
 *mutable* `numpy.random.Generator` across stages would make a stage's draws depend on whether
 upstream stages ran first in the same process — breaking the per-stage byte-reproducibility the
 Phase-0 acceptance criteria require (plan §C "Per-stage RNG sub-streams are order-independent";
@@ -71,10 +73,27 @@ The frozen map (index = position in `SeedSequence.spawn(n)` order):
 | `bootstrap-ci` | 6     | stationary bootstrap for CIs (Phase 4 task 4)                     |
 | `ledoit-wolf`  | 7     | Ledoit-Wolf pairwise Sharpe-difference bootstrap (Phase 4 task 4) |
 | `ruin-mc`      | 8     | matchday-block bootstrap ruin Monte-Carlo (Phase 3 task 4)        |
-| `vector-kelly` | 9     | vector-Kelly Monte-Carlo (Phase 3 task 3)                         |
+| `vector-kelly` | 9     | **RESERVED, currently UNUSED** — see note below                   |
 
 **The order is FROZEN.** Appending a new stage must take the next free index and never renumber
 an existing one, or previously-recorded ReproLog sub-streams would no longer reconstruct.
+
+### `vector-kelly` index 9 is reserved, not consumed (provenance accuracy)
+
+The deployed concurrent-matchday vector-Kelly path ([src/vector_kelly.py](../../src/vector_kelly.py):
+`solve_vector_kelly` / `approx_vector_kelly` / `growth_gap`) is a **fully deterministic convex
+program**: it enumerates the **exact** `3^n` joint-scenario probabilities and calls the pinned
+Clarabel solver. There is **no Monte-Carlo, no rng draw, and no resampling** on this path, so two
+runs produce byte-identical `f` / `growth_gap` (no order-independence concern — there is no order).
+The `vector-kelly` spawn-map slot (index 9) is therefore **reserved for a future scenario-resampled
+vector-Kelly evaluation** (e.g. a bootstrap over resampled joint scenarios) but is **currently not
+consumed by any code**. The stake-stage resolved config records it explicitly as
+`"vector-kelly (reserved, unused: deterministic convex solve, no rng draw)"` so the recorded
+reproducibility envelope does **not** assert randomness the code does not exercise. Were a resampled
+evaluation added later it MUST draw from `src.seeding.substream(root_seed, "vector-kelly")` and carry
+an order-independence / byte-reproducibility test mirroring
+`tests/test_ruin.py::test_ruin_mc_deterministic_and_order_independent`. The index stays at 9 (frozen)
+regardless, so the reservation costs nothing and the map need never be renumbered.
 
 ### Root-seed no-magic-number exemption
 

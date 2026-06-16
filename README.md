@@ -22,6 +22,40 @@ Each phase is built and verified by a multi-agent audit-remediate workflow.
   de-vig with a reproduced Shin-`z` estimator gate), [src/selection.py](src/selection.py) (underdog
   labelling), [src/settlement.py](src/settlement.py) (90-minute three-way settlement; knockout draw →
   push), and the EV / variance / push-Kelly closed forms. Reconciled bit-for-bit against the panel. 195 tests.
+- **Phase 3 — staking & risk:** [src/staking.py](src/staking.py) (flat / fixed-fraction / level-to-odds /
+  Kelly / fractional-Kelly, non-anticipating), [src/costs.py](src/costs.py) (net-of-cost: data-calibrated
+  slippage + one-tick leg-out stress + BFEC commission → effective overround), [src/ledger.py](src/ledger.py)
+  (gross+net PnL, conservation-checked), [src/vector_kelly.py](src/vector_kelly.py) (cvxpy/Clarabel),
+  [src/ruin.py](src/ruin.py) + [src/frontier.py](src/frontier.py) (matchday-block bootstrap ruin / min-bankroll,
+  Busseti–Ryu–Boyd RCK, growth–drawdown frontier). **Honest result:** under the frozen Shin de-vig, 0 of
+  49,628 league bets are positive-EV → `λ*=0` ("do not bet"). 279 tests.
+
+## Running the pipeline (canonical entrypoint)
+
+The project pins native dependencies (cvxpy + Clarabel for the convex vector-Kelly solve;
+ADR-0001) in a `uv`-managed virtual environment. **Every invocation must run under that env**
+— a bare `python -m src.run` resolves to the system interpreter, which lacks the pinned deps
+and crashes with `ModuleNotFoundError: No module named 'cvxpy'` (the stake stage hard-imports
+cvxpy via [src/vector_kelly.py](src/vector_kelly.py)). Sync the env once, then prefix every run
+with `uv run`:
+
+```bash
+uv sync --frozen                                  # provision the pinned env (out-of-the-box)
+uv run python -m src.run --config config/baseline.yaml --stage stake   # run a stage
+```
+
+The [Makefile](Makefile) wraps the canonical chain (every target prefixes `uv run`):
+
+```bash
+make sync                # uv sync --frozen
+make reproduce-staking   # the Phase-3 staking + bankroll/risk stage
+make reproduce           # the full per-phase chain (ingest → … → report)
+make check               # ruff lint/format + pytest (the CI gate)
+```
+
+Bare `python -m src.run` works **only** if the project venv is already the active interpreter
+(e.g. `source .venv/bin/activate` first); otherwise use `uv run` as above. Running `--stage`
+without `uv run` against a global interpreter is unsupported and emits an actionable error.
 
 ## Project thesis and honest prior
 

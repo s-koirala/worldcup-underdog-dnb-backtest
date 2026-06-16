@@ -444,6 +444,460 @@ def run_validate_stage(
     return out, result
 
 
+def run_stake_stage(
+    config_path: Path,
+    *,
+    repo_root: Path | None = None,
+    run_id: str | None = None,
+    logs_dir: Path | None = None,
+) -> tuple[Path, object]:
+    """Run the Phase-3 staking/ledger pass over the league panel + emit its ReproLog.
+
+    Reads data/processed/matches.parquet, de-vigs + settles the LEAGUE block
+    (src.ledger.prepare_settled_bets, a-priori-frozen Shin primary), builds the
+    execution-cost model from the config ``costs`` block + the Phase-1 open->close
+    calibration (src.costs.from_config), and walks the staking/ledger pass for the
+    canonical Kelly scheme (the honest-prior reference: f*=0 where the de-vigged edge
+    is negative -> stake 0 -> "do not bet"). Every ledger entry carries BOTH gross and
+    net PnL; the conservation invariant is asserted before the ReproLog is emitted. The
+    ReproLog pins the canonical panel's content checksum and the data-quality report
+    (open->close calibration basis) in dataset_checksums, and records the root seed +
+    the named `stake` sub-stream derivation (plan task 9.1).
+
+    Returns (reprolog_path, StakeResult-like SimpleNamespace) for the CLI summary.
+    """
+    import types
+
+    import pandas as pd
+
+    from src import costs as costs_mod
+    from src import ledger as ledger_mod
+
+    root = Path(repo_root) if repo_root is not None else PROJECT_ROOT
+    config = load_config(config_path)
+    root_seed = root_seed_from_config(config)
+    # Derive the deterministic `stake` sub-stream (order-independent; never the root
+    # generator, never global np.random). No draws are needed for the deterministic
+    # ledger walk, but the derivation pins (root_seed, "stake") for the ReproLog.
+    _ = seeding.substream(root_seed, "stake")
+
+    matches_path = root / "data" / "processed" / "matches.parquet"
+    if not matches_path.exists():
+        raise FileNotFoundError(
+            f"canonical panel not found: {matches_path}; run --stage ingest first."
+        )
+    panel = pd.read_parquet(matches_path)
+
+    devig_method = (config.get("odds") or {}).get("devig_method", "shin")
+    bets = ledger_mod.prepare_settled_bets(panel, devig_method=devig_method, block="league")
+
+    # Build the cost model from the config costs block + the Phase-1 open->close
+    # calibration (data-selected slippage quantile; ADR-0004). The data-quality report
+    # is the calibration basis; net-of-cost is the reported figure.
+    costs_cfg = config.get("costs") or {}
+    dq_report = costs_mod.latest_data_quality_report(root / "logs")
+    cost_model = costs_mod.from_config(costs_cfg, data_quality_report=dq_report)
+
+    # The honest-prior reference pass: full push-Kelly. Negative de-vigged edge ->
+    # f*=0 -> stake 0 ("do not bet"), reported as a legitimate output (slice brief).
+    result = ledger_mod.build_ledger(bets, scheme="kelly", cost_model=cost_model)
+    summary = ledger_mod.ledger_summary(result)
+
+    # --- Phase 3 tasks 4-6: ruin Monte-Carlo + BRB/RCK grid + frontier (slice brief).
+    risk_outputs = run_risk_engines(config, bets, cost_model, root_seed=root_seed, root=root)
+
+    rid = run_id or make_run_id("stake")
+
+    # dataset_checksums: pin the canonical panel content + the data-quality calibration
+    # report so the slippage basis is reconstructible from the ReproLog.
+    from src import assemble
+
+    dataset_checksums: dict[str, str] = {
+        "matches.parquet": assemble.content_sha256(panel),
+    }
+    if dq_report is not None:
+        dataset_checksums[dq_report.name] = reprolog.sha256_path(dq_report)
+
+    resolved = resolve_config(config, "stake")
+    resolved["_stake_scheme"] = result.scheme
+    resolved["_slippage_quantile_level"] = cost_model.slippage.quantile_level
+    # Pin the ruin Monte-Carlo's RNG sub-stream + B into the resolved-config SHA so its
+    # draws are reconstructible from the log (root seed + spawn map). The deployed
+    # vector-Kelly path is a DETERMINISTIC convex program with NO Monte-Carlo (it draws
+    # from no sub-stream); its spawn-map slot is RESERVED for a future scenario-resampled
+    # evaluation. We record it explicitly as reserved/unused so the reproducibility
+    # envelope does not overstate what is randomized (ADR-0005; src.vector_kelly docstring).
+    resolved["_ruin_mc_substream"] = "ruin-mc"
+    resolved["_vector_kelly_substream"] = (
+        "vector-kelly (reserved, unused: deterministic convex solve, no rng draw)"
+    )
+    resolved["_ruin_mc_b"] = risk_outputs["ruin_b"]
+    config_sha = reprolog.sha256_text(canonical_config_json(resolved))
+
+    record = reprolog.build(
+        run_id=rid,
+        rng_seed=root_seed,
+        repo_root=root,
+        logs_dir=logs_dir,
+        dataset_checksums=dataset_checksums,
+        data_vendor=config["ingest"]["data_vendor"],
+        snapshot_date=datetime.now(UTC).date().isoformat(),
+        config_resolved_sha256=config_sha,
+    )
+    out = record.emit(logs_dir=logs_dir)
+
+    # Persist the risk-engine tables (the F-07/F-08/F-09/T-04/T-05/T-06 DATA) next to
+    # the ReproLog so Phase 5 renders them without re-running the Monte-Carlo.
+    risk_path = write_risk_outputs(risk_outputs, run_id=rid, logs_dir=logs_dir or (root / "logs"))
+
+    facts = types.SimpleNamespace(
+        summary=summary,
+        slippage=cost_model.slippage,
+        commission_rate=cost_model.commission_rate,
+        result=result,
+        risk=risk_outputs,
+        risk_path=risk_path,
+    )
+    return out, facts
+
+
+def _grid_or_default(value: object, default: list[float]) -> list[float]:
+    """Return a config grid as a list[float], falling back to ``default`` when null.
+
+    The staking parameter grids (phi/lambda) are ``null`` placeholders in the baseline
+    config until the walk-forward CV resolves them (no-magic-number). For the ruin/
+    frontier ENGINE to trace a curve before that selection lands, a documented default
+    SWEEP RANGE is used: a uniform grid over the admissible fraction range. These are
+    sweep POSITIONS for the frontier trace, not asserted operating values (the operating
+    point is read off the resulting frontier, never hand-set).
+    """
+    if value:
+        return [float(v) for v in value]  # type: ignore[union-attr]
+    return list(default)
+
+
+# Default frontier SWEEP grids (positions traced before the walk-forward CV resolves the
+# config grids). phi over (0, 0.1] brackets the sub-Kelly fixed fractions a real book
+# runs; lambda over (0, 1] is the full fractional-Kelly range with half-Kelly (0.5) as
+# the documented prior. These are sweep positions for the curve, not operating values.
+_DEFAULT_PHI_SWEEP = [0.005, 0.01, 0.02, 0.03, 0.05, 0.075, 0.10]
+_DEFAULT_LAMBDA_SWEEP = [0.1, 0.25, 0.5, 0.75, 1.0]
+
+
+def run_risk_engines(
+    config: dict[str, Any],
+    bets: object,
+    cost_model: object,
+    *,
+    root_seed: int,
+    root: Path,
+) -> dict[str, Any]:
+    """Run the Phase-3 ruin MC + BRB/RCK grid + growth-drawdown frontier (tasks 4-6).
+
+    Builds the matchday-grouped NET per-bet return blocks from the settled league bets
+    (concurrency preserved), runs the matchday-block bootstrap ruin engine and the
+    growth-drawdown frontier on the ``ruin-mc`` sub-stream, sweeps the BRB
+    ``lambda(alpha_dd, beta_dd)`` / RCK grid over methodology.md §1.2, and -- when the
+    all-negative-edge honest prior makes ``lambda*=0`` dominate -- attaches the
+    counterfactual bankroll/lambda that WOULD be required were the edge real. Returns a
+    JSON-serialisable dict of the tables (the F-07/F-08/F-09/T-04/T-05/T-06 DATA).
+    """
+    import numpy as np
+    import pandas as pd
+
+    from src import frontier as frontier_mod
+    from src import ruin as ruin_mod
+    from src import staking as staking_mod
+
+    risk_cfg = config.get("risk") or {}
+    df = bets  # settled bet table from prepare_settled_bets
+
+    o = pd.to_numeric(df["o_dnb_underdog"], errors="coerce").to_numpy(dtype="float64")
+    p_w = pd.to_numeric(df["p_win"], errors="coerce").to_numpy(dtype="float64")
+    p_d = pd.to_numeric(df["p_draw"], errors="coerce").to_numpy(dtype="float64")
+    gross_ret = pd.to_numeric(df["settle_gross_return"], errors="coerce").to_numpy(dtype="float64")
+    md_key = df["date"].astype("string").to_numpy()
+    # Underdog 1X2 closing price (the slippage-bucket-cut variable) for per-bucket slippage
+    # application in the ruin/frontier net-return blocks (ADR-0004 / Phase-3 task 9).
+    if "underdog_price" in df:
+        under_price = pd.to_numeric(df["underdog_price"], errors="coerce").to_numpy(dtype="float64")
+    else:
+        under_price = np.full(o.shape, np.nan, dtype="float64")
+
+    # NET per-bet PROFIT multiple r = net_return - 1 (the multiplicative-update input).
+    net_profit = np.full(o.shape, np.nan, dtype="float64")
+    for i in range(o.size):
+        if np.isfinite(o[i]) and np.isfinite(gross_ret[i]):
+            bucket = (
+                cost_model.slippage.resolve_odds_bucket(float(under_price[i]))  # type: ignore[attr-defined]
+                if np.isfinite(under_price[i])
+                else None
+            )
+            nr = cost_model.net_return(  # type: ignore[attr-defined]
+                float(o[i]), float(gross_ret[i]), odds_bucket=bucket
+            )
+            net_profit[i] = nr - 1.0
+
+    md = ruin_mod.group_by_matchday(net_profit, md_key, o_dnb=o, p_win=p_w, p_draw=p_d)
+
+    # Honest-prior count: positive-edge bets (push-Kelly f* > 0).
+    fstar = np.atleast_1d(
+        np.asarray(staking_mod.push_kelly_fraction(p_w, p_d, o, clip_negative=True), float)
+    )
+    n_pos = int((fstar > 0.0).sum())
+
+    # Sweep EVERY ruin floor in the declared grid (methodology.md §1.1-§1.2: "Two values
+    # are reported, not one" -- rho in {0.0, 0.5}). Under the multiplicative schemes rho=0
+    # is unreachable (W_t>0 a.s.) but the additive cash schemes CAN cross 0, and the 0.5
+    # behavioural stop-out is the operationally binding floor; both must be reported. The
+    # `ruin-mc` sub-stream is re-derived per rho inside the loop below (order-independent).
+    rho_grid = [float(r) for r in (risk_cfg.get("rho_grid") or [0.0])]
+    eps_target = float(risk_cfg.get("mc_eps_target", 0.05))
+    se_ratio = float(risk_cfg.get("mc_se_ratio", 0.10))
+    deployed_b = int(risk_cfg.get("deployed_b", ruin_mod.DEPLOYED_B))
+    mean_block = float(risk_cfg.get("mean_block_matchdays", ruin_mod.DEFAULT_MEAN_BLOCK_MATCHDAYS))
+    dd_level = str(risk_cfg.get("dd_quantile_level", frontier_mod.DEFAULT_DD_QUANTILE_LEVEL))
+    b_floor = ruin_mod.min_bootstrap_paths(eps_target, se_ratio=se_ratio)
+    n_paths = max(deployed_b, b_floor)
+
+    alpha_grid = tuple(float(a) for a in risk_cfg.get("alpha_dd_grid", [0.5, 0.6, 0.7, 0.8]))
+    beta_grid = tuple(float(b) for b in risk_cfg.get("beta_dd_grid", [0.05, 0.10, 0.20]))
+    op_a = float(risk_cfg.get("operating_alpha_dd", 0.5))
+    op_b = float(risk_cfg.get("operating_beta_dd", 0.10))
+
+    # Counterfactual reference price/draw: data-derived panel medians when config-null.
+    hyp_edge = risk_cfg.get("hypothetical_edge_if_real")
+    o_ref = risk_cfg.get("counterfactual_o_dnb_ref")
+    if o_ref is None:
+        o_ref = float(np.nanmedian(o)) if np.isfinite(o).any() else None
+    pd_ref = risk_cfg.get("counterfactual_p_draw_ref")
+    if pd_ref is None:
+        pd_ref = float(np.nanmean(p_d)) if np.isfinite(p_d).any() else None
+
+    staking_cfg = config.get("staking") or {}
+    phi_grid = _grid_or_default(staking_cfg.get("phi_grid"), _DEFAULT_PHI_SWEEP)
+    lambda_grid = _grid_or_default(staking_cfg.get("lambda_grid"), _DEFAULT_LAMBDA_SWEEP)
+    # The additive cash schemes (flat/level_to_odds) sweep the same fraction-of-initial-
+    # bankroll positions as fixed_fraction (W_0=1 normalisation); config c_grid overrides.
+    unit_grid = _grid_or_default(staking_cfg.get("unit_grid"), phi_grid)
+    c_grid = _grid_or_default(staking_cfg.get("c_grid"), phi_grid)
+
+    # Build a frontier report PER ruin floor rho in the declared grid (methodology.md
+    # §1.1-§1.2). The RNG sub-stream is re-derived per rho so each rho's bootstrap is
+    # reproducible and independent of sweep order. The first rho is the "primary" report
+    # for the back-compat top-level summary fields; all rho are emitted in reports_by_rho.
+    reports_by_rho: list[tuple[float, Any]] = []
+    for rho in rho_grid:
+        rho_rng = seeding.substream(root_seed, "ruin-mc")
+        rep = frontier_mod.build_frontier_report(
+            md,
+            rho=rho,
+            rng=rho_rng,
+            phi_grid=phi_grid,
+            lambda_grid=lambda_grid,
+            unit_grid=unit_grid,
+            c_grid=c_grid,
+            alpha_dd_grid=alpha_grid,
+            beta_dd_grid=beta_grid,
+            operating_alpha_dd=op_a,
+            operating_beta_dd=op_b,
+            n_positive_edge_bets=n_pos,
+            n_paths=n_paths,
+            mean_block=mean_block,
+            hypothetical_edge=float(hyp_edge) if hyp_edge is not None else None,
+            o_dnb_ref=o_ref,
+            p_draw_ref=pd_ref,
+            dd_quantile_level=dd_level,
+        )
+        reports_by_rho.append((rho, rep))
+    # Primary (first-rho) report drives the back-compat top-level fields; rho-independent
+    # verdicts (lambda*=0 dominance, the RCK grid, the counterfactual) are identical across
+    # rho, so the primary carries them for the summary.
+    rho = rho_grid[0]
+    report = reports_by_rho[0][1]
+
+    # --- Task 8: concurrent-match independence test on the real league matchdays
+    # (STAKE Open Question 2). The renormalised single-bet approximation is only
+    # defensible if concurrent outcomes are (near-)independent; this gates that.
+    # vector_kelly hard-imports cvxpy (ADR-0001 pinned native dep). A bare
+    # `python -m src.run` against a global interpreter lacks it; emit an actionable
+    # message pointing at the `uv run` entrypoint rather than a bare ModuleNotFoundError.
+    try:
+        from src import vector_kelly as vk_mod
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(
+            f"the stake stage requires the pinned native deps (cvxpy + Clarabel; ADR-0001) "
+            f"but '{exc.name}' is not importable -- you are likely running a bare "
+            f"`python -m src.run` against a global interpreter. Run under the project venv: "
+            f"`uv sync --frozen` then `uv run python -m src.run --stage stake` "
+            f"(or `make reproduce-staking`). See README 'Running the pipeline'."
+        ) from exc
+
+    outcome_idx = np.where(
+        gross_ret > 1.0 + 1e-9, 0, np.where(np.abs(gross_ret - 1.0) <= 1e-9, 1, 2)
+    )  # 0=win,1=push/draw,2=loss
+    matchday_outcomes = [outcome_idx[md_key == k] for k in pd.unique(md_key)]
+    indep = vk_mod.independence_lr_test(matchday_outcomes, alpha=0.05)
+
+    # --- Task 3: vector-Kelly exact-vs-approximation growth gap, demonstrated on the
+    # LARGEST genuinely-concurrent league matchday (the operational concurrency unit;
+    # the WC group-stage slate is the deployment analogue but its odds are PENDING).
+    # The exact convex program (cvxpy/Clarabel) vs the renormalised-capped deployable
+    # rule, with the growth gap reported (STAKE §5.2-§5.3). On the all-negative-edge
+    # honest prior both collapse to all-cash with a zero gap -- reported, not hidden.
+    vk_gap = None
+    if md.n_matchdays:
+        sizes = [blk.size for blk in md.odds_blocks]
+        big = int(np.argmax(sizes))
+        if md.odds_blocks[big].size >= 2:
+            # Cap the slate at a tractable scenario count (3^n scenarios): the exact
+            # program enumerates joint outcomes, so a very large slate is infeasible to
+            # enumerate; use the first n_cap bets of the largest slate as the demonstrator.
+            n_cap = min(md.odds_blocks[big].size, 8)
+            o_s = md.odds_blocks[big][:n_cap]
+            pw_s = md.pwin_blocks[big][:n_cap]
+            pd_s = md.pdraw_blocks[big][:n_cap]
+            finite = np.isfinite(o_s) & np.isfinite(pw_s) & np.isfinite(pd_s)
+            if finite.sum() >= 2:
+                gg = vk_mod.growth_gap(o_s[finite], pw_s[finite], pd_s[finite], lam=1.0)
+                vk_gap = {
+                    "n_concurrent_bets": int(finite.sum()),
+                    "exact_growth": gg.exact.expected_log_growth,
+                    "approx_growth": gg.approx.expected_log_growth,
+                    "growth_gap": gg.growth_gap,
+                    "relative_gap": gg.relative_gap,
+                    "exact_budget_used": gg.exact.budget_used,
+                    "approx_renormalised": gg.approx.renormalised,
+                    "solver_status": gg.exact.solver_status,
+                }
+
+    return {
+        "n_bets": int(o.size),
+        "n_matchdays": md.n_matchdays,
+        "n_positive_edge_bets": n_pos,
+        "lambda_star_zero_dominates": report.lambda_star_zero_dominates,
+        "ruin_b": n_paths,
+        "ruin_b_precision_floor": b_floor,
+        "ruin_eps_target": eps_target,
+        "ruin_se_ratio": se_ratio,
+        "rho": rho,
+        "rho_grid": rho_grid,
+        "report": report,
+        "reports_by_rho": reports_by_rho,
+        "independence_test": indep,
+        "vector_kelly_gap": vk_gap,
+    }
+
+
+def write_risk_outputs(risk_outputs: dict[str, Any], *, run_id: str, logs_dir: Path) -> Path:
+    """Serialise the ruin/frontier/RCK tables to logs/risk_frontier_<run_id>.json (task 6).
+
+    Produces the F-07/F-08/F-09/T-04/T-05/T-06 DATA (Phase 5 renders the figures). The
+    file carries: the per-scheme frontier points + efficient envelope (T-04/T-05/F-07);
+    the BRB lambda(alpha_dd, beta_dd) / RCK grid (T-06); and -- when lambda*=0 dominates
+    -- the counterfactual required-if-edge-real feasibility statement.
+    """
+    import json as _json
+    from dataclasses import asdict
+
+    def _serialise_scheme_frontiers(rep: Any) -> dict[str, Any]:
+        """Serialise one frontier report's per-scheme curves (T-04/T-05/F-07 data)."""
+        return {
+            scheme: {
+                "all_below_zero_growth": sf.all_below_zero_growth,
+                "points": [
+                    {
+                        "param_name": p.param_name,
+                        "param_value": p.param_value,
+                        "expected_log_growth": p.expected_log_growth,
+                        "drawdown_budget": p.drawdown_budget,
+                        "prob_ruin": p.prob_ruin,
+                        "prob_ruin_ci": list(p.prob_ruin_ci),
+                        "drawdown_quantiles": p.drawdown_quantiles,
+                    }
+                    for p in sf.points
+                ],
+                "efficient_points": [
+                    {
+                        "param_name": p.param_name,
+                        "param_value": p.param_value,
+                        "expected_log_growth": p.expected_log_growth,
+                        "drawdown_budget": p.drawdown_budget,
+                    }
+                    for p in sf.efficient_points
+                ],
+            }
+            for scheme, sf in rep.scheme_frontiers.items()
+        }
+
+    report = risk_outputs["report"]
+    rho_grid = risk_outputs.get("rho_grid", [risk_outputs["rho"]])
+    reports_by_rho = risk_outputs.get("reports_by_rho", [(risk_outputs["rho"], report)])
+    payload: dict[str, Any] = {
+        "run_id": run_id,
+        "n_bets": risk_outputs["n_bets"],
+        "n_matchdays": risk_outputs["n_matchdays"],
+        "n_positive_edge_bets": risk_outputs["n_positive_edge_bets"],
+        "lambda_star_zero_dominates": risk_outputs["lambda_star_zero_dominates"],
+        "ruin_monte_carlo": {
+            "B": risk_outputs["ruin_b"],
+            "B_precision_floor": risk_outputs["ruin_b_precision_floor"],
+            "eps_target": risk_outputs["ruin_eps_target"],
+            "se_ratio": risk_outputs["ruin_se_ratio"],
+            "rho": risk_outputs["rho"],
+            "rho_grid": rho_grid,
+            "substream": "ruin-mc",
+            "justification": (
+                "B set by the precision target SE<=se_ratio*eps => "
+                "B>=(1-eps)/(se_ratio^2 * eps); deployed B clears the floor (STAKE §6.3)"
+            ),
+        },
+        # The primary (first-rho) per-scheme frontiers (back-compat top-level view).
+        "scheme_frontiers": _serialise_scheme_frontiers(report),
+        # EVERY ruin floor rho in the declared grid (methodology.md §1.1-§1.2: "Two values
+        # are reported, not one"). The rho=0.5 behavioural stop-out -- the operationally
+        # binding floor under the multiplicative schemes -- is reported here alongside the
+        # rho=0.0 literal-bankruptcy benchmark, per scheme.
+        "ruin_by_rho": [
+            {"rho": float(r), "scheme_frontiers": _serialise_scheme_frontiers(rep)}
+            for r, rep in reports_by_rho
+        ],
+        "brb_rck_grid": [
+            {
+                "alpha_dd": r.alpha_dd,
+                "beta_dd": r.beta_dd,
+                "theta": r.theta,
+                "lambda_rck": r.lam_rck,
+                "constraint_at_lambda": r.constraint_at_lam,
+                "binds": r.binds,
+            }
+            for r in report.rck_grid
+        ],
+        "dd_quantile_level": report.dd_quantile_level,
+    }
+    indep = risk_outputs.get("independence_test")
+    if indep is not None:
+        payload["concurrent_independence_test"] = {
+            "lr_statistic": indep.lr_statistic,
+            "dof": indep.dof,
+            "p_value": indep.p_value,
+            "n_matchdays": indep.n_matchdays,
+            "reject_independence": indep.reject_independence,
+            "alpha": indep.alpha,
+            "note": indep.note,
+        }
+    vk_gap = risk_outputs.get("vector_kelly_gap")
+    if vk_gap is not None:
+        payload["vector_kelly_growth_gap"] = vk_gap
+    if report.required_if_edge_real is not None:
+        payload["required_if_edge_real"] = asdict(report.required_if_edge_real)
+
+    out = Path(logs_dir) / f"risk_frontier_{run_id}.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(_json.dumps(payload, indent=2, default=float), encoding="utf-8", newline="\n")
+    return out
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m src.run",
@@ -502,8 +956,29 @@ def main(argv: list[str] | None = None) -> int:
             f"reprolog={out.relative_to(PROJECT_ROOT).as_posix()}"
         )
         return 0 if result.gates_passed else 4
-    # The remaining per-stage compute (price/stake/infer/report) lands in later
-    # phases; Phase 1 implements `ingest` (incl. assembly) and `validate`.
+    if args.stage == "stake":
+        # Phase 3: staking-scheme + costs + ledger pass over the league panel
+        # (plan tasks 1, 2, 9). Net-of-cost is the reported figure (ADR-0004).
+        out, facts = run_stake_stage(args.config)
+        s = facts.summary
+        rk = facts.risk
+        print(
+            f"stake OK: scheme={s['scheme']} n_bets={s['n_bets']} n_staked={s['n_staked']}; "
+            f"slippage={facts.slippage.quantile_level}={facts.slippage.value:.6f} "
+            f"(n_obs={facts.slippage.n_observable}); commission={facts.commission_rate:.4f}; "
+            f"net_growth={s['net_growth_multiple']:.6f} (gross={s['gross_growth_multiple']:.6f}); "
+            f"conservation_ok={s['conservation_ok']}; "
+            f"reprolog={out.relative_to(PROJECT_ROOT).as_posix()}"
+        )
+        print(
+            f"  risk: n_pos_edge={rk['n_positive_edge_bets']}/{rk['n_bets']} "
+            f"lambda*=0_dominates={rk['lambda_star_zero_dominates']}; "
+            f"ruin_MC B={rk['ruin_b']} (floor={rk['ruin_b_precision_floor']}); "
+            f"frontier={facts.risk_path.relative_to(PROJECT_ROOT).as_posix()}"
+        )
+        return 0
+    # The remaining per-stage compute (price/infer/report) lands in later phases;
+    # Phase 1 implements `ingest`/`validate`; Phase 3 implements `stake`.
     sys.stderr.write(
         f"stage {args.stage!r} compute is not implemented yet; "
         "use --dry-run for the Phase-0 acceptance check.\n"

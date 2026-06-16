@@ -129,7 +129,11 @@ staking:
   schemes: [flat, fixed_fraction, level_to_odds, kelly, fractional_kelly]
   # fixed_fraction `phi`: the canonical scale-free comparator (STAKE §7.1).
   phi_grid: null # filled by walk-forward CV
-  # level_to_odds `c`: stake proportional to 1/(d-1) (STAKE §7.1).
+  # flat `unit`: constant cash stake per bet (a fraction of INITIAL bankroll on the
+  # W_0=1 normalisation; STAKE §2). Additive (cash) ruin dynamics. Null -> the frontier
+  # sweep reuses phi_grid positions until walk-forward CV resolves it (no-magic-number).
+  unit_grid: null # filled by walk-forward CV
+  # level_to_odds `c`: stake proportional to 1/(d-1) (STAKE §7.1). Additive (cash) scheme.
   c_grid: null # filled by walk-forward CV
   # fractional_kelly `lambda`: data-derived (Bayesian shrinkage 1/(1+CV^2) and/or
   # the binding BRB drawdown constraint over methodology.md §1.2 (alpha_dd,
@@ -157,6 +161,50 @@ costs:
   #       overround and reconciled with the M_1X2 - M_AH wedge (CALC §3.5).
   bfec_commission_rate: null # config tunable, documented selection (§D.3); not a literal
   net_of_cost_required_before_reporting: true
+
+# --- Risk decision inputs + ruin/frontier engine (plan Phase 3 tasks 4-6) -----
+# The swept RISK GRIDS are declared in methodology.md §1.2 as decision inputs (risk
+# preferences, NOT estimated from data) and mirrored here verbatim. The frontier is
+# reported across the WHOLE grid; the operating point is read off the frontier, never
+# asserted. B is DERIVED from the precision target (SE<=eps/10 => B>=100(1-eps)/eps;
+# src.ruin.min_bootstrap_paths), run at B=10^4 -- NOT a magic number.
+risk:
+  # Ruin floor rho (methodology.md §1.2): 0.0 = literal-bankruptcy benchmark (additive
+  # case only; multiplicative staking has W_t>0 a.s.); 0.5 = behavioural stop-out.
+  rho_grid: [0.0, 0.5]
+  # Drawdown floor alpha_dd (methodology.md §1.2): 0.5 = BRB worked example; 0.7 = BRB
+  # experiments' threshold; range brackets the prospect-theory stop-loss region.
+  alpha_dd_grid: [0.5, 0.6, 0.7, 0.8]
+  # Breach probability beta_dd (methodology.md §1.2): centred on 0.10 (BRB worked
+  # tolerance), bracketed by the conventional 0.05 and a looser 0.20.
+  beta_dd_grid: [0.05, 0.10, 0.20]
+  # Operating cell read off the frontier (the BRB worked-example pair, used as the
+  # reported operating point until the walk-forward CV selects it; STAKE §6.2 worked
+  # theta = log0.10/log0.50 = 3.32). NOT asserted as "the" answer -- the full grid is
+  # reported; this is the cell the headline lambda/RCK is read at.
+  operating_alpha_dd: 0.5
+  operating_beta_dd: 0.10
+  # Monte-Carlo precision target: SE on P(ruin) near eps <= eps/10 (se_ratio=0.1),
+  # giving B>=100(1-eps)/eps; deployed B=10^4 clears the floor with margin (STAKE §6.3).
+  mc_eps_target: 0.05
+  mc_se_ratio: 0.10
+  deployed_b: 10000
+  # Stationary-bootstrap mean block length in MATCHDAYS (block=matchday concurrency
+  # unit; Politis-Romano 1994). 1.0 = each draw is one matchday (the simplest
+  # concurrency-preserving resample); larger captures cross-matchday dependence.
+  mean_block_matchdays: 1.0
+  # Max-drawdown budget quantile level for the frontier x-axis (a tail POSITION in the
+  # empirical max-DD distribution, not an asserted magnitude).
+  dd_quantile_level: p95
+  # Counterfactual feasibility input (slice brief; STAKE §7.3, Open Question 6). When
+  # lambda*=0 dominates (all-negative-edge honest prior), report the bankroll/lambda
+  # that WOULD be required were the edge real. The hypothetical edge is the literature-
+  # anchored reverse-FLB candidate magnitude (EDGE §5.4); a power/feasibility statement,
+  # NOT a profit claim. The DNB price / draw prob the counterfactual is evaluated at are
+  # the panel medians, resolved at runtime (left null here -> data-derived).
+  hypothetical_edge_if_real: 0.0093 # RBF 2024 integer-vs-.5 reverse-FLB gradient (EDGE §3.2)
+  counterfactual_o_dnb_ref: null # null -> panel median DNB price (data-derived)
+  counterfactual_p_draw_ref: null # null -> panel mean de-vigged draw prob (data-derived)
 
 # --- World-Cup hold-out (plan tasks 4, 5, 10; DATA §2.2, §7) ------------------
 # The WC is the never-touched held-out test block. There is NO clean public WC
